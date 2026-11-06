@@ -20,6 +20,24 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 // Override to use any OpenAI-compatible endpoint (or a local mock when testing).
 const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
 
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || null;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+// Override to use a different Gemini endpoint (or a local mock when testing).
+const GEMINI_BASE_URL = (process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
+
+// Which provider answers chat: 'openai' | 'gemini' | 'demo' (canned replies, no key needed).
+// By default it follows whichever key is set (OpenAI first if both are). Set LLM_PROVIDER to
+// openai, gemini or demo to force one; forcing a provider whose key is missing gives demo.
+function pickProvider() {
+  const want = (process.env.LLM_PROVIDER || '').toLowerCase();
+  if (want === 'demo') return 'demo';
+  if (want === 'openai') return OPENAI_API_KEY ? 'openai' : 'demo';
+  if (want === 'gemini') return GEMINI_API_KEY ? 'gemini' : 'demo';
+  return OPENAI_API_KEY ? 'openai' : GEMINI_API_KEY ? 'gemini' : 'demo';
+}
+const PROVIDER = pickProvider();
+const PROVIDER_MODEL = PROVIDER === 'gemini' ? GEMINI_MODEL : OPENAI_MODEL;
+
 const MAX_MESSAGE_CHARS = 4000;   // per new user message
 const MAX_HISTORY_MESSAGES = 20;  // earlier messages accepted from the browser and sent to the model
 const MAX_HISTORY_CHARS = 8000;   // per earlier message (longer ones are truncated)
@@ -184,12 +202,12 @@ function buildDemoResponse(agent, userMsg) {
 
   let response = agent.greeting || `Hello! I'm your ${agent.name}. ${agent.description}`;
   if (toolUsed) response += `\n\n🔧 Tool used: \`${toolUsed}\`\n\`\`\`\n${toolOutput}\n\`\`\``;
-  response += `\n\n_Demo mode — replies are canned. Set \`OPENAI_API_KEY\` on the server for real answers._`;
+  response += `\n\n_Demo mode — replies are canned. Set \`GEMINI_API_KEY\` or \`OPENAI_API_KEY\` on the server for real answers._`;
   return response;
 }
 
 // ============================
-//  LLM STREAMING (Demo + OpenAI)
+//  LLM STREAMING (Demo + OpenAI + Gemini)
 // ============================
 async function* streamOpenAI(agent, messages, signal) {
   const res = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
@@ -228,19 +246,85 @@ async function* streamOpenAI(agent, messages, signal) {
   }
 }
 
+// Gemini wants roles 'user' / 'model', starting with 'user'. Merge neighbours that share a role
+// and drop any leading model turns (history is capped, so it can start mid-conversation).
+function toGeminiContents(messages) {
+  const contents = [];
+  for (const m of messages) {
+    const role = m.role === 'assistant' ? 'model' : 'user';
+    const last = contents[contents.length - 1];
+    if (last && last.role === role) last.parts[0].text += `\n\n${m.content}`;
+    else contents.push({ role, parts: [{ text: m.content }] });
+  }
+  while (contents.length && contents[0].role !== 'user') contents.shift();
+  return contents;
+}
+
+async function* streamGemini(agent, messages, signal) {
+  // The key goes in a header (never the URL) so it can't leak into request logs.
+  const res = await fetch(`${GEMINI_BASE_URL}/models/${encodeURIComponent(GEMINI_MODEL)}:streamGenerateContent?alt=sse`, {
+    method: 'POST',
+    signal,
+    headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: agent.systemPrompt }] },
+      contents: toGeminiContents(messages)
+    })
+  });
+  if (!res.ok || !res.body) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`Gemini responded ${res.status} ${detail.slice(0, 200)}`);
+  }
+
+  let yielded = false;
+  let blockReason = null;
+  function* handleLines(lines) {
+    for (const raw of lines) {
+      const line = raw.replace(/\r$/, ''); // Gemini's SSE uses CRLF
+      if (!line.startsWith('data:')) continue;
+      let chunk;
+      try { chunk = JSON.parse(line.slice(5).trim()); } catch { continue; } // ignore malformed lines
+      if (chunk.error) throw new Error(`Gemini error: ${String(chunk.error.message || '').slice(0, 200)}`);
+      if (chunk.promptFeedback?.blockReason) blockReason = chunk.promptFeedback.blockReason;
+      const text = (chunk.candidates?.[0]?.content?.parts || [])
+        .filter(p => !p.thought) // never show the model's internal reasoning
+        .map(p => p.text || '')
+        .join('');
+      if (text) { yielded = true; yield text; }
+    }
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop(); // keep any partial line for the next chunk
+    yield* handleLines(lines);
+  }
+  yield* handleLines([buffer]); // a final line may arrive without a trailing newline
+  if (!yielded) throw new Error(blockReason ? `Gemini blocked the prompt (${blockReason})` : 'Gemini returned no text');
+}
+
+const STREAMERS = { openai: streamOpenAI, gemini: streamGemini };
+
 async function* callLLM(agent, messages, signal) {
-  if (OPENAI_API_KEY) {
+  const stream = STREAMERS[PROVIDER];
+  if (stream) {
     let started = false;
     try {
       const history = messages.map(({ role, content }) => ({ role, content }));
-      for await (const token of streamOpenAI(agent, history, signal)) {
+      for await (const token of stream(agent, history, signal)) {
         started = true;
         yield token;
       }
       return;
     } catch (err) {
       if (signal?.aborted) return;
-      console.error('OpenAI error:', err.message);
+      console.error(`${PROVIDER} error:`, err.message);
       if (started) throw err; // can't cleanly switch to demo mid-reply
       // nothing sent yet -> fall through to demo reply
     }
@@ -285,7 +369,7 @@ function rateLimit(req, res, next) {
 //  ROUTES
 // ============================
 app.get('/healthz', (req, res) => res.type('text').send('ok'));
-app.get('/api/health', (req, res) => res.json({ ok: true, mode: OPENAI_API_KEY ? 'live' : 'demo', agents: AGENTS.length }));
+app.get('/api/health', (req, res) => res.json({ ok: true, mode: PROVIDER === 'demo' ? 'demo' : 'live', provider: PROVIDER, agents: AGENTS.length }));
 
 app.get('/api/agents', (req, res) => res.json(PUBLIC_AGENTS));
 app.get('/api/agents/:id', (req, res) => {
@@ -366,7 +450,7 @@ app.post('/api/tools/execute', (req, res) => {
 if (require.main === module) {
   const server = app.listen(PORT, () => {
     console.log(`🚀 AgentVerse website running at http://localhost:${PORT}`);
-    console.log(`🤖 Mode: ${OPENAI_API_KEY ? `REAL AI (OpenAI, ${OPENAI_MODEL})` : 'DEMO (instant, no API key needed)'}`);
+    console.log(`🤖 Mode: ${PROVIDER === 'demo' ? 'DEMO (instant, no API key needed)' : `REAL AI (${PROVIDER}, ${PROVIDER_MODEL})`}`);
   });
 
   // Let hosts (Render, Railway, Docker) stop the container cleanly.
