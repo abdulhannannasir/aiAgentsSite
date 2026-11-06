@@ -40,8 +40,22 @@ The header badge shows **Demo mode** or **Live AI** so you can tell which one yo
 | `PORT`           | `3000`        | Set automatically by Render / Railway.               |
 | `OPENAI_API_KEY` | _(empty)_     | Empty = demo mode. Set = real AI replies.            |
 | `OPENAI_MODEL`   | `gpt-4o-mini` | Any chat-completions model your key can use.         |
+| `OPENAI_BASE_URL`| `https://api.openai.com/v1` | Point at any OpenAI-compatible API.    |
 
-Built-in limits: 20 chat requests per minute per IP, 4,000 characters per message, sessions expire after 1 hour idle.
+Built-in limits: 20 chat requests per minute per IP (best-effort, see below), 4,000 characters per new message, and the last 20 earlier messages (8,000 characters each) sent as context.
+
+## How chat works (stateless)
+
+The server keeps **no per-user state**. The browser holds the conversation and sends the recent history with every message, so any server instance can answer any request. That is what makes it safe on serverless hosts like Vercel, and it means restarts and redeploys never lose a conversation that is open in the browser.
+
+```
+POST /api/chat   { "agentId": "coding-assistant",
+                   "message": "What is my name?",
+                   "history": [ { "role": "user", "content": "My name is Ada" },
+                                { "role": "assistant", "content": "Nice to meet you, Ada!" } ] }
+```
+
+The reply streams back as server-sent events (`stream` chunks, then `done`). `history` is optional, only `user` / `assistant` roles are accepted, and refreshing the page starts a new conversation.
 
 ## Deploy
 
@@ -89,13 +103,15 @@ Omit `-e OPENAI_API_KEY=...` to run in demo mode.
 
 `server.js` exports the Express app for this (it only calls `listen()` when run directly), so the same code still works locally, in Docker, and on Render/Railway.
 
-**Serverless caveat:** each request may run on a different instance, so the in-memory sessions and rate limiter do not persist between requests. That is harmless in demo mode. Before adding `OPENAI_API_KEY` on Vercel, make the chat stateless (send the recent history from the browser) or move sessions to a shared store, otherwise the model loses conversation context between messages.
+**To turn on real AI:** in the Vercel project go to **Settings → Environment Variables**, add `OPENAI_API_KEY` (tick **Sensitive**), then **redeploy** — variables only apply to new deployments. Chat is stateless (see above), so multi-turn conversations work across serverless instances.
+
+**Rate limiting on serverless:** the built-in per-IP limiter keeps its counters in each instance's memory, so on Vercel it is only a speed bump. For a hard limit, add a rate-limit rule for `/api/chat` under **Firewall** in the Vercel dashboard, and set a monthly spending cap in your OpenAI account.
 
 ## Things to know before going public
 
 - **Free tiers sleep.** Render's free web services spin down when idle, so the first visit after a quiet period can take about a minute. Free-tier terms change — check the provider's current pricing page.
-- **Sessions live in memory.** Restarting or redeploying clears chat history. Add Redis or a database if you need persistence.
-- **Live mode costs money.** Anyone who can reach your site can spend your OpenAI credits. The per-IP rate limit helps; also set a spending cap in your OpenAI account.
+- **Conversations live in the browser tab.** Refreshing or closing the page ends them. Add a database if you need saved history across visits.
+- **Live mode costs money.** Anyone who can reach your site can spend your OpenAI credits. The per-IP limiter is best-effort (per instance); use a hard limit at your host and set a spending cap in your OpenAI account.
 - **Tools are simulated.** `web_search`, `ticket_system`, `email_sender`, etc. return mock output. Nothing is searched, created, or sent.
 - **Tailwind runs from its CDN** (`cdn.tailwindcss.com`), which is fine for a demo but not recommended for high-traffic production. Swap in a built stylesheet when you need to.
 - **Legal / finance / health agents** are chat templates, not professional advice. The legal reviewer's prompt says so; consider adding a visible disclaimer for the others.

@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 
@@ -18,18 +17,20 @@ try {
 const PORT = process.env.PORT || 3000;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || null;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+// Override to use any OpenAI-compatible endpoint (or a local mock when testing).
+const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
 
-const MAX_MESSAGE_CHARS = 4000;   // per user message
-const HISTORY_FOR_LLM = 20;       // messages sent to the model
-const MAX_SESSION_MESSAGES = 60;  // messages kept in memory per session
-const SESSION_TTL_MS = 60 * 60 * 1000;
+const MAX_MESSAGE_CHARS = 4000;   // per new user message
+const MAX_HISTORY_MESSAGES = 20;  // earlier messages accepted from the browser and sent to the model
+const MAX_HISTORY_CHARS = 8000;   // per earlier message (longer ones are truncated)
 const RATE_LIMIT = { windowMs: 60 * 1000, max: 20 }; // chat requests per IP per window
 
 const app = express();
-app.set('trust proxy', 1); // Render / Railway / Fly sit behind one proxy
+app.set('trust proxy', 1); // Render / Railway / Fly / Vercel sit behind one proxy
 app.disable('x-powered-by');
 app.use(cors());
-app.use(express.json({ limit: '32kb' }));
+// History (up to 20 x 8000 chars, some multi-byte) rides along with each chat request.
+app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ============================
@@ -191,7 +192,7 @@ function buildDemoResponse(agent, userMsg) {
 //  LLM STREAMING (Demo + OpenAI)
 // ============================
 async function* streamOpenAI(agent, messages, signal) {
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  const res = await fetch(`${OPENAI_BASE_URL}/chat/completions`, {
     method: 'POST',
     signal,
     headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
@@ -231,7 +232,7 @@ async function* callLLM(agent, messages, signal) {
   if (OPENAI_API_KEY) {
     let started = false;
     try {
-      const history = messages.slice(-HISTORY_FOR_LLM).map(({ role, content }) => ({ role, content }));
+      const history = messages.map(({ role, content }) => ({ role, content }));
       for await (const token of streamOpenAI(agent, history, signal)) {
         started = true;
         yield token;
@@ -255,14 +256,13 @@ async function* callLLM(agent, messages, signal) {
 }
 
 // ============================
-//  SESSIONS + RATE LIMIT (in memory)
+//  RATE LIMIT (in memory, per instance)
 // ============================
-const sessions = new Map(); // sessionId -> { agentId, messages, touched }
+// Best-effort only: on serverless hosts each instance has its own counter, so use the
+// host's firewall / rate limiting (and an OpenAI spending cap) for hard limits.
 const hitsByIp = new Map(); // ip -> [timestamps]
 
 const cleanup = setInterval(() => {
-  const cutoff = Date.now() - SESSION_TTL_MS;
-  for (const [id, s] of sessions) if (s.touched < cutoff) sessions.delete(id);
   for (const [ip, hits] of hitsByIp) {
     if (!hits.length || hits[hits.length - 1] < Date.now() - RATE_LIMIT.windowMs) hitsByIp.delete(ip);
   }
@@ -294,28 +294,36 @@ app.get('/api/agents/:id', (req, res) => {
   res.json(agent);
 });
 
+// Chat is stateless: the browser keeps the conversation and sends the recent turns with
+// each request, so any server instance (e.g. Vercel serverless) can answer any request.
+// Returns a cleaned [{ role, content }] array, or null if the input is malformed.
+function parseHistory(raw) {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) return null;
+  const history = [];
+  for (const m of raw.slice(-MAX_HISTORY_MESSAGES)) {
+    if (!m || (m.role !== 'user' && m.role !== 'assistant') || typeof m.content !== 'string') return null;
+    if (!m.content.trim()) continue; // empty turns would make the model API reject the request
+    history.push({ role: m.role, content: m.content.slice(0, MAX_HISTORY_CHARS) });
+  }
+  return history;
+}
+
 app.post('/api/chat', rateLimit, async (req, res) => {
-  const { sessionId, agentId, message } = req.body || {};
-  if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 64 ||
-      typeof agentId !== 'string' ||
-      typeof message !== 'string' || !message.trim()) {
+  const body = req.body || {};
+  const { agentId, message } = body;
+  if (typeof agentId !== 'string' || typeof message !== 'string' || !message.trim()) {
     return res.status(400).json({ error: 'Missing or invalid fields' });
   }
   if (message.length > MAX_MESSAGE_CHARS) {
     return res.status(400).json({ error: `Message too long (max ${MAX_MESSAGE_CHARS} characters)` });
   }
+  const history = parseHistory(body.history);
+  if (!history) return res.status(400).json({ error: 'Invalid history' });
   const agent = AGENTS.find(a => a.id === agentId);
   if (!agent) return res.status(404).json({ error: 'Agent not found' });
 
-  let session = sessions.get(sessionId);
-  if (!session || session.agentId !== agentId) {
-    session = { agentId, messages: [], touched: Date.now() };
-    sessions.set(sessionId, session);
-  }
-  session.touched = Date.now();
-
-  const userMsg = { id: crypto.randomUUID(), role: 'user', content: message, timestamp: Date.now() };
-  session.messages.push(userMsg);
+  const messages = [...history, { role: 'user', content: message }];
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -324,7 +332,6 @@ app.post('/api/chat', rateLimit, async (req, res) => {
   res.flushHeaders();
 
   const send = payload => res.write(`data: ${JSON.stringify(payload)}\n\n`);
-  send({ type: 'user', message: userMsg });
 
   // Stop work if the browser goes away mid-stream.
   const abort = new AbortController();
@@ -332,7 +339,7 @@ app.post('/api/chat', rateLimit, async (req, res) => {
 
   let aiContent = '';
   try {
-    for await (const chunk of callLLM(agent, session.messages, abort.signal)) {
+    for await (const chunk of callLLM(agent, messages, abort.signal)) {
       aiContent += chunk;
       send({ type: 'stream', content: chunk });
     }
@@ -343,20 +350,8 @@ app.post('/api/chat', rateLimit, async (req, res) => {
 
   if (abort.signal.aborted) return;
 
-  if (aiContent) {
-    const aiMsg = { id: crypto.randomUUID(), role: 'assistant', content: aiContent, timestamp: Date.now() };
-    session.messages.push(aiMsg);
-    if (session.messages.length > MAX_SESSION_MESSAGES) session.messages.splice(0, session.messages.length - MAX_SESSION_MESSAGES);
-    send({ type: 'done', message: aiMsg });
-  } else {
-    send({ type: 'done', message: null });
-  }
+  send({ type: 'done', message: aiContent ? { role: 'assistant', content: aiContent } : null });
   res.end();
-});
-
-app.get('/api/session/:sessionId', (req, res) => {
-  const s = sessions.get(req.params.sessionId);
-  res.json(s ? { agentId: s.agentId, messages: s.messages } : { messages: [] });
 });
 
 const TOOL_NAMES = new Set(['web_search', 'calculator', 'code_interpreter', 'file_reader', 'ticket_system', 'email_sender', 'knowledge_base']);

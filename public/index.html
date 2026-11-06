@@ -176,10 +176,14 @@
       agentName: $('agent-name'), agentRole: $('agent-role'), agentAvatar: $('agent-avatar'),
       sectionTitle: $('section-title'), sectionDesc: $('section-desc'), typing: $('typing')
     };
-    const state = { agents: [], categories: [], selectedAgent: null, sessionId: null, categoryFilter: 'all', busy: false };
+    // The chat is stateless on the server: `history` holds this conversation as
+    // [{ role: 'user' | 'assistant', content }] and is sent with every message.
+    const state = { agents: [], categories: [], selectedAgent: null, history: [], categoryFilter: 'all', busy: false, abort: null };
+    const HISTORY_SENT = 20;          // earlier messages sent per request (server accepts up to 20)
+    const HISTORY_ENTRY_CHARS = 8000; // per earlier message (server truncates beyond this too)
+    const HISTORY_KEPT = 40;          // cap on what the browser remembers
 
     const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    const newId = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
 
     // Open chat links in a new tab, safely.
     if (window.DOMPurify) {
@@ -244,7 +248,8 @@
       const agent = state.agents.find(a => a.id === id);
       if (!agent) return;
       state.selectedAgent = agent;
-      state.sessionId = null; // fresh conversation per agent
+      state.abort?.abort(); // drop any reply still streaming for the previous agent
+      state.history = []; // fresh conversation per agent
 
       els.agentGrid.querySelectorAll('.agent-card').forEach(c => c.classList.toggle('agent-selected', c.dataset.agent === id));
       els.emptyState.classList.add('hidden');
@@ -307,13 +312,24 @@
       scrollToBottom();
 
       els.typing.classList.remove('hidden');
-      if (!state.sessionId) state.sessionId = newId();
+
+      // Bind to this conversation now. Switching agent aborts the request (see selectAgent),
+      // so a reply never lands in a different agent's chat.
+      const agent = state.selectedAgent;
+      const history = state.history;
+      const ctrl = new AbortController();
+      state.abort = ctrl;
 
       try {
         const res = await fetch('/api/chat', {
           method: 'POST',
+          signal: ctrl.signal,
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sessionId: state.sessionId, agentId: state.selectedAgent.id, message: text })
+          body: JSON.stringify({
+            agentId: agent.id,
+            message: text,
+            history: history.slice(-HISTORY_SENT).map(m => ({ role: m.role, content: m.content.slice(0, HISTORY_ENTRY_CHARS) }))
+          })
         });
         if (res.status === 429) throw new Error('You are sending messages too fast. Please wait a minute.');
         if (!res.ok || !res.body) throw new Error(`Chat failed (${res.status}). Please try again.`);
@@ -351,10 +367,19 @@
         }
         if (window.Prism) Prism.highlightAllUnder(aiBody);
         if (!content && !errored) aiBody.textContent = '(No response)';
+
+        // Remember the exchange only if it completed cleanly, so a retry doesn't carry a broken turn.
+        if (content && !errored) {
+          history.push({ role: 'user', content: text }, { role: 'assistant', content });
+          if (history.length > HISTORY_KEPT) history.splice(0, history.length - HISTORY_KEPT);
+        }
       } catch (err) {
-        console.error(err);
-        showError(err.message || 'Something went wrong. Please try again.');
+        if (err.name !== 'AbortError') { // an abort just means the user switched agents
+          console.error(err);
+          showError(err.message || 'Something went wrong. Please try again.');
+        }
       } finally {
+        if (state.abort === ctrl) state.abort = null;
         els.typing.classList.add('hidden');
         setBusy(false);
         els.userInput.focus({ preventScroll: true });
