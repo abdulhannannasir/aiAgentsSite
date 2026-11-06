@@ -1,4 +1,7 @@
-# Railway config-as-code. Railway auto-detects Node, so only the deploy settings are needed.
+# Railway config-as-code. Railway auto-detects Node; this makes sure the front end is built first.
+[build]
+buildCommand = "npm ci --include=dev && npm run build"
+
 [deploy]
 startCommand = "npm start"
 healthcheckPath = "/healthz"
