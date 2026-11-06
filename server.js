@@ -32,7 +32,12 @@ const GEMINI_MODELS = [GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS.filter(m => m !==
 // Retry tuning (the defaults suit production; the env overrides exist mainly for tests).
 const GEMINI_ATTEMPTS_PER_MODEL = 2;
 const GEMINI_RETRY_DELAY_MS = Number(process.env.GEMINI_RETRY_DELAY_MS ?? 400);
-const GEMINI_DEADLINE_MS = Number(process.env.GEMINI_DEADLINE_MS ?? 12000); // stop starting new attempts after this
+// Google can hold a call open for minutes before refusing it (seen: ~170 s before a 503), so every
+// wait is bounded: each attempt must start responding within TIMEOUT, the whole "get a stream open"
+// phase gets DEADLINE in total, and an open stream that goes silent is cut off after IDLE.
+const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS ?? 8000);
+const GEMINI_DEADLINE_MS = Number(process.env.GEMINI_DEADLINE_MS ?? 16000);
+const GEMINI_IDLE_MS = Number(process.env.GEMINI_IDLE_MS ?? 30000);
 const GEMINI_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]); // temporary: retry, then try the next model
 
 // Which provider answers chat: 'openai' | 'gemini' | 'demo' (canned replies, no key needed).
@@ -275,9 +280,41 @@ const sleep = (ms, signal) => new Promise(resolve => {
   signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
 });
 
+// fetch() that gives up if the response headers have not arrived within `ms`. After that, only the
+// caller's `signal` can cancel the body. A timeout throws an error with `timedOut = true`.
+async function fetchWithHeaderTimeout(url, init, signal, ms) {
+  const ctrl = new AbortController();
+  if (signal?.aborted) ctrl.abort();
+  else signal?.addEventListener('abort', () => ctrl.abort(), { once: true });
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, ms);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (err) {
+    throw timedOut ? Object.assign(new Error(`no response within ${ms}ms`), { timedOut: true }) : err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// reader.read() that fails (and cancels the stream) if nothing arrives for `ms`.
+function readWithIdleTimeout(reader, ms) {
+  let timer;
+  const stalled = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      // Reject BEFORE cancelling: cancel() resolves the pending read as "done", which would win the
+      // race and make a stalled stream look like one that finished normally.
+      reject(new Error(`Gemini stream stalled (no data for ${ms}ms)`));
+      reader.cancel().catch(() => {});
+    }, ms);
+  });
+  return Promise.race([reader.read(), stalled]).finally(() => clearTimeout(timer));
+}
+
 // Opens a streaming Gemini response. This only ever happens before any text is sent to the
 // user, so retrying and switching models is invisible to them. Rules:
 //   temporary errors (429, 5xx, network)  -> retry the same model once, then try the next model
+//   no response within the timeout        -> try the next model at once (a hang means overload)
 //   404 (model not available to this key) -> try the next model straight away
 //   anything else (400, 401, 403, ...)    -> give up now; retrying or switching cannot help
 async function openGeminiStream(agent, messages, signal) {
@@ -293,13 +330,20 @@ async function openGeminiStream(agent, messages, signal) {
   for (const model of GEMINI_MODELS) {
     for (let attempt = 1; attempt <= GEMINI_ATTEMPTS_PER_MODEL; attempt++) {
       if (signal?.aborted) throw new Error('aborted');
-      if (Date.now() - startedAt > GEMINI_DEADLINE_MS) throw lastError || new Error('Gemini: out of time');
+      const remaining = GEMINI_DEADLINE_MS - (Date.now() - startedAt);
+      if (remaining <= 0) throw lastError || new Error('Gemini: out of time');
+      const timeoutMs = Math.min(GEMINI_TIMEOUT_MS, remaining);
 
       let res;
       try {
-        res = await fetch(`${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, { method: 'POST', signal, headers, body });
+        res = await fetchWithHeaderTimeout(`${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, { method: 'POST', headers, body }, signal, timeoutMs);
       } catch (err) {
         if (signal?.aborted) throw err;
+        if (err.timedOut) {
+          lastError = new Error(`Gemini (${model}) gave no response within ${timeoutMs}ms`);
+          console.warn(`gemini ${model} attempt ${attempt}/${GEMINI_ATTEMPTS_PER_MODEL}: no response within ${timeoutMs}ms, trying next model`);
+          break; // don't wait on a model that is hanging; move to the next one
+        }
         lastError = new Error(`Gemini (${model}) network error: ${err.message}`);
         console.warn(`gemini ${model} attempt ${attempt}/${GEMINI_ATTEMPTS_PER_MODEL}: network error ${err.message}`);
         if (attempt < GEMINI_ATTEMPTS_PER_MODEL) await sleep(GEMINI_RETRY_DELAY_MS, signal);
@@ -350,7 +394,7 @@ async function* streamGemini(agent, messages, signal) {
   const decoder = new TextDecoder();
   let buffer = '';
   while (true) {
-    const { value, done } = await reader.read();
+    const { value, done } = await readWithIdleTimeout(reader, GEMINI_IDLE_MS);
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
