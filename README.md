@@ -41,12 +41,15 @@ The header badge shows **Demo mode** or **Live AI** so you can tell which one yo
 | `GEMINI_API_KEY` | _(empty)_     | Google Gemini key. Set = real AI replies via Gemini. |
 | `GEMINI_MODEL`   | `gemini-flash-latest` | Any Gemini model your key can use.           |
 | `GEMINI_BASE_URL`| `https://generativelanguage.googleapis.com/v1beta` | Override the Gemini endpoint. |
+| `GEMINI_FALLBACK_MODELS` | `gemini-flash-lite-latest,gemini-2.5-flash` | Backup models, tried in order. Empty = no backups. |
 | `OPENAI_API_KEY` | _(empty)_     | OpenAI key. Set = real AI replies via OpenAI.        |
 | `OPENAI_MODEL`   | `gpt-4o-mini` | Any chat-completions model your key can use.         |
 | `OPENAI_BASE_URL`| `https://api.openai.com/v1` | Point at any OpenAI-compatible API.    |
 | `LLM_PROVIDER`   | _(auto)_      | `gemini`, `openai` or `demo` to force one provider.  |
 
 With no key set the app runs in demo mode. If both keys are set it uses OpenAI unless `LLM_PROVIDER=gemini`. If a provider call fails before any text is sent (bad key, quota, blocked prompt), that reply falls back to demo text rather than showing an error. `/api/health` reports which provider is active.
+
+**Gemini retries and backup models.** Google sometimes answers `503 high demand` or `429 quota` for a model. Before falling back to demo text, the server retries a temporary error (429, 5xx, network) once on the same model, then tries each backup model in `GEMINI_FALLBACK_MODELS`. A `404` (model name not available to your key) skips straight to the next model, and errors that no other model could fix (`400` bad request, `401`/`403` bad key) fail immediately. This only happens before any text reaches the user, so it is invisible apart from a slightly slower first word, and attempts stop after about 12 seconds. Each failed attempt is logged (`gemini <model> attempt 1/2: HTTP 503`), so you can see it in your host's logs.
 
 Built-in limits: 20 chat requests per minute per IP (best-effort, see below), 4,000 characters per new message, and the last 20 earlier messages (8,000 characters each) sent as context.
 

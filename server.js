@@ -24,6 +24,16 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || null;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 // Override to use a different Gemini endpoint (or a local mock when testing).
 const GEMINI_BASE_URL = (process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
+// Backup models, tried in order when GEMINI_MODEL is overloaded or unavailable. Comma-separated;
+// set it to an empty string to turn backups off.
+const GEMINI_FALLBACK_MODELS = (process.env.GEMINI_FALLBACK_MODELS ?? 'gemini-flash-lite-latest,gemini-2.5-flash')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const GEMINI_MODELS = [GEMINI_MODEL, ...GEMINI_FALLBACK_MODELS.filter(m => m !== GEMINI_MODEL)];
+// Retry tuning (the defaults suit production; the env overrides exist mainly for tests).
+const GEMINI_ATTEMPTS_PER_MODEL = 2;
+const GEMINI_RETRY_DELAY_MS = Number(process.env.GEMINI_RETRY_DELAY_MS ?? 400);
+const GEMINI_DEADLINE_MS = Number(process.env.GEMINI_DEADLINE_MS ?? 12000); // stop starting new attempts after this
+const GEMINI_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]); // temporary: retry, then try the next model
 
 // Which provider answers chat: 'openai' | 'gemini' | 'demo' (canned replies, no key needed).
 // By default it follows whichever key is set (OpenAI first if both are). Set LLM_PROVIDER to
@@ -260,21 +270,63 @@ function toGeminiContents(messages) {
   return contents;
 }
 
-async function* streamGemini(agent, messages, signal) {
+const sleep = (ms, signal) => new Promise(resolve => {
+  const timer = setTimeout(resolve, ms);
+  signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+});
+
+// Opens a streaming Gemini response. This only ever happens before any text is sent to the
+// user, so retrying and switching models is invisible to them. Rules:
+//   temporary errors (429, 5xx, network)  -> retry the same model once, then try the next model
+//   404 (model not available to this key) -> try the next model straight away
+//   anything else (400, 401, 403, ...)    -> give up now; retrying or switching cannot help
+async function openGeminiStream(agent, messages, signal) {
   // The key goes in a header (never the URL) so it can't leak into request logs.
-  const res = await fetch(`${GEMINI_BASE_URL}/models/${encodeURIComponent(GEMINI_MODEL)}:streamGenerateContent?alt=sse`, {
-    method: 'POST',
-    signal,
-    headers: { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: agent.systemPrompt }] },
-      contents: toGeminiContents(messages)
-    })
+  const headers = { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' };
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: agent.systemPrompt }] },
+    contents: toGeminiContents(messages)
   });
-  if (!res.ok || !res.body) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Gemini responded ${res.status} ${detail.slice(0, 200)}`);
+  const startedAt = Date.now();
+  let lastError = null;
+
+  for (const model of GEMINI_MODELS) {
+    for (let attempt = 1; attempt <= GEMINI_ATTEMPTS_PER_MODEL; attempt++) {
+      if (signal?.aborted) throw new Error('aborted');
+      if (Date.now() - startedAt > GEMINI_DEADLINE_MS) throw lastError || new Error('Gemini: out of time');
+
+      let res;
+      try {
+        res = await fetch(`${GEMINI_BASE_URL}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, { method: 'POST', signal, headers, body });
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        lastError = new Error(`Gemini (${model}) network error: ${err.message}`);
+        console.warn(`gemini ${model} attempt ${attempt}/${GEMINI_ATTEMPTS_PER_MODEL}: network error ${err.message}`);
+        if (attempt < GEMINI_ATTEMPTS_PER_MODEL) await sleep(GEMINI_RETRY_DELAY_MS, signal);
+        continue;
+      }
+
+      if (res.ok && res.body) {
+        if (model !== GEMINI_MODEL) console.warn(`gemini: ${GEMINI_MODEL} unavailable, answered by backup model ${model}`);
+        return res;
+      }
+
+      const detail = await res.text().catch(() => '');
+      lastError = new Error(`Gemini (${model}) responded ${res.status} ${detail.slice(0, 200)}`);
+      console.warn(`gemini ${model} attempt ${attempt}/${GEMINI_ATTEMPTS_PER_MODEL}: HTTP ${res.status}`);
+      if (GEMINI_RETRY_STATUSES.has(res.status)) {
+        if (attempt < GEMINI_ATTEMPTS_PER_MODEL) await sleep(GEMINI_RETRY_DELAY_MS, signal);
+        continue;
+      }
+      if (res.status === 404) break; // unknown model name: move on to the next one
+      throw lastError;               // key / request problems are the same for every model
+    }
   }
+  throw lastError || new Error('Gemini unavailable');
+}
+
+async function* streamGemini(agent, messages, signal) {
+  const res = await openGeminiStream(agent, messages, signal);
 
   let yielded = false;
   let blockReason = null;
@@ -450,7 +502,7 @@ app.post('/api/tools/execute', (req, res) => {
 if (require.main === module) {
   const server = app.listen(PORT, () => {
     console.log(`🚀 AgentVerse website running at http://localhost:${PORT}`);
-    console.log(`🤖 Mode: ${PROVIDER === 'demo' ? 'DEMO (instant, no API key needed)' : `REAL AI (${PROVIDER}, ${PROVIDER_MODEL})`}`);
+    console.log(`🤖 Mode: ${PROVIDER === 'demo' ? 'DEMO (instant, no API key needed)' : `REAL AI (${PROVIDER}, ${PROVIDER === 'gemini' ? GEMINI_MODELS.join(' -> ') : PROVIDER_MODEL})`}`);
   });
 
   // Let hosts (Render, Railway, Docker) stop the container cleanly.
