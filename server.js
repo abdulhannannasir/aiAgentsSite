@@ -38,7 +38,7 @@ const GEMINI_RETRY_DELAY_MS = Number(process.env.GEMINI_RETRY_DELAY_MS ?? 400);
 const GEMINI_TIMEOUT_MS = Number(process.env.GEMINI_TIMEOUT_MS ?? 8000);
 const GEMINI_DEADLINE_MS = Number(process.env.GEMINI_DEADLINE_MS ?? 16000);
 const GEMINI_IDLE_MS = Number(process.env.GEMINI_IDLE_MS ?? 30000);
-const GEMINI_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]); // temporary: retry, then try the next model
+const GEMINI_RETRY_STATUSES = new Set([500, 502, 503, 504]); // temporary server trouble: retry, then try the next model
 
 // Which provider answers chat: 'openai' | 'gemini' | 'demo' (canned replies, no key needed).
 // By default it follows whichever key is set (OpenAI first if both are). Set LLM_PROVIDER to
@@ -313,8 +313,9 @@ function readWithIdleTimeout(reader, ms) {
 
 // Opens a streaming Gemini response. This only ever happens before any text is sent to the
 // user, so retrying and switching models is invisible to them. Rules:
-//   temporary errors (429, 5xx, network)  -> retry the same model once, then try the next model
+//   temporary errors (5xx, network)       -> retry the same model once, then try the next model
 //   no response within the timeout        -> try the next model at once (a hang means overload)
+//   429 (this model's quota / rate limit) -> try the next model at once (a quota won't clear in 400 ms)
 //   404 (model not available to this key) -> try the next model straight away
 //   anything else (400, 401, 403, ...)    -> give up now; retrying or switching cannot help
 async function openGeminiStream(agent, messages, signal) {
@@ -355,15 +356,24 @@ async function openGeminiStream(agent, messages, signal) {
         return res;
       }
 
-      const detail = await res.text().catch(() => '');
-      lastError = new Error(`Gemini (${model}) responded ${res.status} ${detail.slice(0, 200)}`);
-      console.warn(`gemini ${model} attempt ${attempt}/${GEMINI_ATTEMPTS_PER_MODEL}: HTTP ${res.status}`);
+      // Read Google's explanation, but never wait long for it.
+      let bodyTimer;
+      const detail = await Promise.race([
+        res.text().catch(() => ''),
+        new Promise(resolve => { bodyTimer = setTimeout(() => resolve(''), 2000); })
+      ]);
+      clearTimeout(bodyTimer);
+      let reason = detail;
+      try { reason = JSON.parse(detail).error?.message || detail; } catch { /* not JSON: use the raw text */ }
+      reason = String(reason).replace(/\s+/g, ' ').slice(0, 200);
+      lastError = new Error(`Gemini (${model}) responded ${res.status} ${reason}`);
+      console.warn(`gemini ${model} attempt ${attempt}/${GEMINI_ATTEMPTS_PER_MODEL}: HTTP ${res.status} ${reason}`);
       if (GEMINI_RETRY_STATUSES.has(res.status)) {
         if (attempt < GEMINI_ATTEMPTS_PER_MODEL) await sleep(GEMINI_RETRY_DELAY_MS, signal);
         continue;
       }
-      if (res.status === 404) break; // unknown model name: move on to the next one
-      throw lastError;               // key / request problems are the same for every model
+      if (res.status === 429 || res.status === 404) break; // quota hit / unknown model: move on to the next one
+      throw lastError;                                      // key / request problems are the same for every model
     }
   }
   throw lastError || new Error('Gemini unavailable');
