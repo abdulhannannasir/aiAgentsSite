@@ -366,12 +366,18 @@ app.post('/api/tools/execute', (req, res) => {
   res.json({ result: executeTool(tool, input) });
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`🚀 AgentVerse website running at http://localhost:${PORT}`);
-  console.log(`🤖 Mode: ${OPENAI_API_KEY ? `REAL AI (OpenAI, ${OPENAI_MODEL})` : 'DEMO (instant, no API key needed)'}`);
-});
+// Run as a normal server (local, Docker, Render, Railway). When another runtime
+// imports this file instead (Vercel serverless), it only needs the exported app.
+if (require.main === module) {
+  const server = app.listen(PORT, () => {
+    console.log(`🚀 AgentVerse website running at http://localhost:${PORT}`);
+    console.log(`🤖 Mode: ${OPENAI_API_KEY ? `REAL AI (OpenAI, ${OPENAI_MODEL})` : 'DEMO (instant, no API key needed)'}`);
+  });
 
-// Let hosts (Render, Railway, Docker) stop the container cleanly.
-for (const sig of ['SIGTERM', 'SIGINT']) {
-  process.on(sig, () => server.close(() => process.exit(0)));
+  // Let hosts (Render, Railway, Docker) stop the container cleanly.
+  for (const sig of ['SIGTERM', 'SIGINT']) {
+    process.on(sig, () => server.close(() => process.exit(0)));
+  }
 }
+
+module.exports = app;

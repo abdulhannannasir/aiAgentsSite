@@ -81,6 +81,16 @@ docker run -p 3000:3000 -e OPENAI_API_KEY=sk-... agentverse
 
 Omit `-e OPENAI_API_KEY=...` to run in demo mode.
 
+### Option D — Vercel (free Hobby plan, no card)
+
+1. Sign in at [vercel.com](https://vercel.com) with GitHub.
+2. **Add New → Project**, import the repository. Vercel detects Express and runs `server.js` as a serverless function, serving `public/` from its CDN. No build settings needed.
+3. Deploy. Every push to `main` redeploys automatically.
+
+`server.js` exports the Express app for this (it only calls `listen()` when run directly), so the same code still works locally, in Docker, and on Render/Railway.
+
+**Serverless caveat:** each request may run on a different instance, so the in-memory sessions and rate limiter do not persist between requests. That is harmless in demo mode. Before adding `OPENAI_API_KEY` on Vercel, make the chat stateless (send the recent history from the browser) or move sessions to a shared store, otherwise the model loses conversation context between messages.
+
 ## Things to know before going public
 
 - **Free tiers sleep.** Render's free web services spin down when idle, so the first visit after a quiet period can take about a minute. Free-tier terms change — check the provider's current pricing page.
