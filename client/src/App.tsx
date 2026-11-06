@@ -1,5 +1,5 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, ClipboardCopy, FileDown, Keyboard, MessageSquarePlus, Moon, Plus, Sun, Upload } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, ClipboardCopy, FileDown, Home, Keyboard, MessageSquarePlus, Moon, Plus, Rocket, Sparkles, Sun, Upload } from 'lucide-react';
 import { AgentCreator } from './components/AgentCreator';
 import { AgentExportModal } from './components/AgentExportModal';
 import { AgentAvatar, CUSTOM_GRADIENT, workflowIcon } from './components/AgentAvatar';
@@ -14,11 +14,14 @@ import { useChat } from './hooks/useChat';
 import { fetchAgents, fetchHealth, fetchWorkflows } from './lib/api';
 import { EMPTY_DRAFT, MAX_AGENT_FILE_BYTES, isStoredAgent, parseAgentFile } from './lib/agentFile';
 import { chatFileName, chatToMarkdown, copyToClipboard, downloadTextFile } from './lib/chatExport';
-import { MOD, isEditableTarget, prefersReducedMotion } from './lib/platform';
+import { MOD, isEditableTarget } from './lib/platform';
 import { readStored, writeStored } from './lib/storage';
+import { useFx, type FxPref } from './lib/fx/capability';
+import { useView } from './lib/route';
+import { CustomCursor } from './components/fx/CustomCursor';
+import { FxBackground } from './components/fx/FxBackground';
+import { LandingPage } from './components/landing/LandingPage';
 import type { ActiveAgent, Agent, AgentDraft, Command, CustomAgent, Theme, Workflow } from './types';
-
-const ThreeBackground = lazy(() => import('./components/ThreeBackground'));
 
 const THEME_KEY = 'agentverse.theme';
 const AGENTS_KEY = 'agentverse.customAgents';
@@ -36,6 +39,8 @@ export default function App() {
   const { toast } = useToast();
   const chat = useChat();
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [view, go] = useView();
+  const fx = useFx();
 
   // ---- data from the server
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -59,7 +64,7 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(() => readStored<Theme>(THEME_KEY, 'dark', isTheme));
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#0b0c10' : '#eef2f9');
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#05060a' : '#eef2f9');
     writeStored(THEME_KEY, theme);
   }, [theme]);
 
@@ -100,8 +105,9 @@ export default function App() {
   const selectAgent = useCallback((key: string) => {
     setSelectedKey(key);
     setComposer(EMPTY_COMPOSER);
+    go('app'); // from the landing page or the palette: open the workspace on this agent
     focusComposer();
-  }, [focusComposer]);
+  }, [focusComposer, go]);
 
   const newChat = useCallback(() => {
     if (!selectedKey) return;
@@ -129,8 +135,9 @@ export default function App() {
       if (lead) setSelectedKey(lead.id);
     }
     setComposer({ value: w.promptStarter, workflow: w });
+    go('app');
     focusComposer(true);
-  }, [selectedKey, agents, focusComposer]);
+  }, [selectedKey, agents, focusComposer, go]);
 
   // ---- chat export
   const markdown = useCallback(() => chatToMarkdown({ agentName: activeAgent?.name ?? 'Agent', messages }), [activeAgent, messages]);
@@ -192,7 +199,10 @@ export default function App() {
   // ---- command palette
   const commands = useMemo<Command[]>(() => {
     const list: Command[] = [];
-    if (activeAgent) {
+    list.push(view === 'app'
+      ? { id: 'go-home', group: 'Navigate', label: 'Go to the home page', keywords: 'landing overview intro', icon: <Home size={15} />, run: () => go('landing') }
+      : { id: 'go-app', group: 'Navigate', label: 'Open the workspace', keywords: 'launch chat agents app', icon: <Rocket size={15} />, run: () => go('app') });
+    if (view === 'app' && activeAgent) {
       list.push({ id: 'new-chat', group: 'Chat', label: 'New chat', hint: `Clear the conversation with ${activeAgent.name}`, shortcut: `${MOD}N`, keywords: 'clear reset', icon: <MessageSquarePlus size={15} />, run: newChat });
       if (messages.length) {
         list.push({ id: 'chat-copy', group: 'Chat', label: 'Copy chat as Markdown', keywords: 'export clipboard', icon: <ClipboardCopy size={15} />, run: () => void copyChat() });
@@ -212,27 +222,30 @@ export default function App() {
       list.push({ id: `agent-${a.id}`, group: 'Agents', label: `Switch to ${a.name}`, hint: `${a.category} • ${a.useCase}`, keywords: `${a.category} ${a.description} ${a.useCase}`, icon: <AgentAvatar icon={a.icon} gradient={a.gradient} size={24} />, run: () => selectAgent(a.id) });
     }
     list.push({ id: 'theme', group: 'Appearance', label: theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme', keywords: 'toggle dark light mode appearance', icon: theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />, run: () => setTheme(t => (t === 'dark' ? 'light' : 'dark')) });
+    const nextFx: FxPref = fx.pref === 'auto' ? 'low' : fx.pref === 'low' ? 'off' : 'auto';
+    const fxName = { auto: 'full (automatic)', low: 'lite', off: 'off' } as const;
+    list.push({ id: 'fx', group: 'Appearance', label: `Visual effects: ${fxName[fx.pref]} — switch to ${fxName[nextFx]}`, keywords: 'effects animation 3d cursor performance motion reduce lite', icon: <Sparkles size={15} />, run: () => { fx.setPref(nextFx); toast(`Visual effects: ${fxName[nextFx]}`); } });
     list.push({ id: 'shortcuts', group: 'Help', label: 'Keyboard shortcuts', shortcut: '?', keywords: 'help keys cheatsheet', icon: <Keyboard size={15} />, run: () => setShortcutsOpen(true) });
     list.push({ id: 'docs', group: 'Help', label: 'Open documentation', keywords: 'help guide how to docs', icon: <BookOpen size={15} />, run: () => setDocsOpen(true) });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeAgent, messages.length, workflows, customAgents, agents, theme, newChat, copyChat, downloadChat, startWorkflow, selectAgent, openCreator]);
+  }, [view, go, fx.pref, activeAgent, messages.length, workflows, customAgents, agents, theme, newChat, copyChat, downloadChat, startWorkflow, selectAgent, openCreator]);
 
   // ---- global keyboard shortcuts
   const anyModalOpen = paletteOpen || shortcutsOpen || docsOpen || creator.open || !!exportDraft;
-  const live = useRef({ anyModalOpen, newChat, hasAgent: !!activeAgent });
-  live.current = { anyModalOpen, newChat, hasAgent: !!activeAgent };
+  const live = useRef({ anyModalOpen, newChat, hasAgent: !!activeAgent, inApp: view === 'app' });
+  live.current = { anyModalOpen, newChat, hasAgent: !!activeAgent, inApp: view === 'app' };
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      const { anyModalOpen: modal, newChat: startNew, hasAgent } = live.current;
+      const { anyModalOpen: modal, newChat: startNew, hasAgent, inApp } = live.current;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && !e.altKey && e.key.toLowerCase() === 'k') { e.preventDefault(); setPaletteOpen(o => !o); return; }
       if (modal) return;
       // Cmd/Ctrl+N is often reserved by the browser; Alt+N is the dependable alternative.
-      if (e.code === 'KeyN' && ((mod && !e.shiftKey) || (e.altKey && !mod))) { e.preventDefault(); startNew(); return; }
+      if (inApp && e.code === 'KeyN' && ((mod && !e.shiftKey) || (e.altKey && !mod))) { e.preventDefault(); startNew(); return; }
       if (isEditableTarget(e.target) || mod || e.altKey) return;
       if (e.key === '?') { e.preventDefault(); setShortcutsOpen(true); return; }
-      if (e.key === '/' && hasAgent) {
+      if (inApp && e.key === '/' && hasAgent) {
         e.preventDefault();
         setComposer(c => (c.value || c.workflow ? c : { ...c, value: '/' }));
         focusComposer(true);
@@ -242,17 +255,30 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [focusComposer]);
 
-  const showBackground = theme === 'dark' && !prefersReducedMotion();
+  // The landing page is always dark; the workspace follows the theme. The swarm only shows on dark surfaces.
+  const darkSurface = view === 'landing' || theme === 'dark';
+  const openBuilder = useCallback((draft?: AgentDraft) => { go('app'); openCreator(null, draft ?? EMPTY_DRAFT); }, [go, openCreator]);
 
   return (
     <div className="relative min-h-dvh">
-      {showBackground && <Suspense fallback={null}><ThreeBackground /></Suspense>}
+      {darkSurface && <FxBackground view={view} />}
+      {darkSurface && <div aria-hidden className="grain" />}
+      <CustomCursor />
 
+      {view === 'landing' ? (
+        <LandingPage
+          agents={agents} workflows={workflows} mode={mode}
+          onLaunch={() => go('app')} onOpenAgent={selectAgent} onRunWorkflow={startWorkflow}
+          onOpenBuilder={openBuilder} onOpenPalette={() => setPaletteOpen(true)}
+          onOpenDocs={() => setDocsOpen(true)} onOpenShortcuts={() => setShortcutsOpen(true)}
+        />
+      ) : (
+      <>
       <Navbar
         agentCount={agents.length} mode={mode} theme={theme}
         onToggleTheme={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
         onOpenPalette={() => setPaletteOpen(true)} onOpenShortcuts={() => setShortcutsOpen(true)} onOpenDocs={() => setDocsOpen(true)}
-        onCreateAgent={() => openCreator(null)}
+        onCreateAgent={() => openCreator(null)} onHome={() => go('landing')}
       />
 
       <main className="relative z-10 mx-auto max-w-7xl px-3 py-4 sm:px-6 lg:py-6">
@@ -260,13 +286,13 @@ export default function App() {
           <div role="alert" className="glass mx-auto mt-16 max-w-md rounded-2xl p-8 text-center">
             <p className="text-lg font-semibold">Could not load the agents</p>
             <p className="mt-1 text-sm text-muted">The server did not answer. Check your connection and try again.</p>
-            <button type="button" onClick={() => void load()} className="mt-4 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white">Retry</button>
+            <button type="button" onClick={() => void load()} className="mt-4 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-on-accent">Retry</button>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 lg:h-[calc(100dvh-132px)] lg:min-h-[620px] lg:grid-cols-12 lg:gap-6">
             <div className={`min-h-0 min-w-0 lg:col-span-4 lg:block ${selectedKey ? 'hidden' : 'block'}`}>
               <AgentSidebar
-                agents={agents} customAgents={customAgents} selectedKey={selectedKey} onSelect={selectAgent}
+                agents={agents} customAgents={customAgents} selectedKey={selectedKey} activeKeys={chat.streamingKeys} onSelect={selectAgent}
                 onCreate={() => openCreator(null)} onImport={() => triggerImport(null)}
                 onEditCustom={id => { const a = customAgents.find(x => x.id === id); if (a) openCreator(id, draftOf(a)); }}
                 onExportCustom={id => { const a = customAgents.find(x => x.id === id); if (a) setExportDraft(draftOf(a)); }}
@@ -286,6 +312,8 @@ export default function App() {
           </div>
         )}
       </main>
+      </>
+      )}
 
       <input ref={importInput} type="file" accept=".json,application/json" className="sr-only" tabIndex={-1} aria-hidden data-testid="global-import-input"
         onChange={e => { void onImportFile(e.target.files?.[0]); e.target.value = ''; }} />

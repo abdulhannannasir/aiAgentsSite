@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Send, Square, X } from 'lucide-react';
 import { SlashCommandMenu } from './SlashCommandMenu';
 import { workflowIcon } from './AgentAvatar';
+import { Waveform } from './fx/Waveform';
 import { rankBy } from '../lib/search';
 import type { Workflow } from '../types';
 
@@ -15,11 +16,13 @@ interface Props {
   onSend: () => void;
   onStop: () => void;
   sending: boolean;
+  /** 0..1 streaming throughput, drives the waveform while a reply is running. */
+  level?: number;
   agentName: string;
   inputRef: RefObject<HTMLTextAreaElement>;
 }
 
-export function ChatInput({ value, onChange, workflow, onWorkflowChange, workflows, onSend, onStop, sending, agentName, inputRef }: Props) {
+export function ChatInput({ value, onChange, workflow, onWorkflowChange, workflows, onSend, onStop, sending, level = 0, agentName, inputRef }: Props) {
   const listId = useId();
   const [active, setActive] = useState(0);
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
@@ -101,7 +104,7 @@ export function ChatInput({ value, onChange, workflow, onWorkflowChange, workflo
           )}
         </AnimatePresence>
 
-        <div className="glass relative flex items-end gap-2 rounded-2xl px-3 py-2 transition focus-within:border-accent focus-within:ring-1 focus-within:ring-accent">
+        <div data-sending={sending} className={`glass relative flex items-end gap-2 rounded-2xl px-3 py-2 transition focus-within:border-accent focus-within:ring-1 focus-within:ring-accent ${sending ? 'border-neon-cyan/50 shadow-glow-cyan' : ''}`}>
           <textarea
             ref={inputRef}
             rows={1}
@@ -118,12 +121,13 @@ export function ChatInput({ value, onChange, workflow, onWorkflowChange, workflo
             aria-activedescendant={menuOpen && matches.length ? `${listId}-opt-${active}` : undefined}
             className="max-h-[200px] min-h-[28px] flex-1 resize-none bg-transparent py-1.5 text-base outline-none placeholder:text-muted focus-visible:outline-none"
           />
+          {sending && <Waveform active level={level} bars={20} className="mb-1.5 hidden sm:flex" />}
           {sending ? (
             <button type="button" onClick={onStop} aria-label="Stop generating" className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-rose-500/90 text-white transition hover:bg-rose-500 active:scale-95">
               <Square size={14} fill="currentColor" />
             </button>
           ) : (
-            <button type="button" onClick={onSend} disabled={!canSend} aria-label="Send message" className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-white transition enabled:hover:brightness-110 enabled:active:scale-95 disabled:opacity-40">
+            <button type="button" onClick={onSend} disabled={!canSend} aria-label="Send message" className="mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent text-on-accent transition enabled:hover:brightness-110 enabled:active:scale-95 disabled:opacity-40">
               <Send size={16} />
             </button>
           )}

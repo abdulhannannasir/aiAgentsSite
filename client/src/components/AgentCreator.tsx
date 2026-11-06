@@ -196,7 +196,7 @@ function Form({ initial, initialWarnings = [], editing, onClose, onSave, onDelet
         </div>
         <div className="flex gap-2">
           <button type="button" onClick={onClose} className="rounded-xl px-3.5 py-2 text-sm font-medium text-muted transition hover:bg-hover hover:text-fg">Cancel</button>
-          <button type="submit" className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:brightness-110 active:scale-95">{editing ? 'Save changes' : 'Create agent'}</button>
+          <button type="submit" className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-on-accent transition hover:brightness-110 active:scale-95">{editing ? 'Save changes' : 'Create agent'}</button>
         </div>
       </div>
     </form>
