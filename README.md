@@ -185,9 +185,16 @@ git remote add origin https://github.com/<you>/<repo>.git && git push -u origin 
 
 ### Vercel (free Hobby plan, no card)
 
-1. Import the repository at [vercel.com](https://vercel.com). It detects Express and `vercel.json` runs `npm run build`; the API runs as a serverless function and `public/` is served from the CDN.
+1. Import the repository at [vercel.com](https://vercel.com). `vercel.json` runs `npm run build`, publishes the built `public/` folder as **static output on the CDN**, and runs the Express app as a single function (`api/[...path].js` loads `server.js`) for every `/api/*` request.
 2. Settings → **Environment Variables**: add `GEMINI_API_KEY` (tick **Sensitive**) for live replies, then redeploy.
 3. Rate limiting on serverless: the built-in limiter keeps counters per instance, so it is only a speed bump. Add a rate-limit rule for `/api/chat` under **Firewall** (path equals `/api/chat`, 20 requests per 60 s per IP) and set a quota or spending cap with your model provider.
+4. After every deploy run the smoke test. It loads the real page, because a site can pass every HTTP check and still be blank:
+
+```bash
+node e2e/smoke.mjs https://your-site.vercel.app
+```
+
+Why the static output matters: if the Express app serves `public/` itself (`express.static`), Vercel bundles those files into the function and rewrites the JavaScript from ES modules to CommonJS. Browsers then fail with `exports is not defined` and the page is blank. Keep the built app on the CDN as configured here.
 
 ### Render
 
