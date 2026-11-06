@@ -1,9 +1,45 @@
 # AgentVerse — AI Agent Workspace
 
-42 pre-made AI agents, **multi-agent workflows**, and a **custom agent builder** — a React + TypeScript front end on a small Express API.
+42 pre-made AI agents, **multi-agent workflows**, and a **custom agent builder**: a React + TypeScript front end on a small Express API, wrapped in a cyberpunk-style interface with a 3D agent swarm, a scroll-driven landing page and live collaboration visuals.
+
+- `/` is the landing page. `/#/app` is the workspace (hash routing, so no server rewrites are needed).
 
 - **Demo mode** (default): works instantly with no API key. Replies are canned text and simulated workflow steps.
 - **Live mode**: set `GEMINI_API_KEY` (Google Gemini) or `OPENAI_API_KEY` (OpenAI) and every agent answers with a real model, streamed token by token.
+
+## The interface
+
+| Piece | What it is |
+| --- | --- |
+| **3D agent swarm** | A WebGL network of drifting nodes and links (custom GLSL) behind everything. Nodes shy away from the cursor, the camera flies through it as you scroll, and pulses travel along the links. |
+| **Hero orb** | An interactive noise-displaced GLSL orb with a wireframe shell and seven orbiting "agents". It follows the cursor across the page, swells on hover and ripples on click. |
+| **Custom cursor** | A dot, an easing ring and a neon trail. Over small controls the ring morphs to wrap them (magnetic snap), over cards it becomes a labelled disc, over text fields it steps aside. |
+| **Magnetic buttons** | Primary buttons lean toward the cursor when it gets close, then spring back. |
+| **3D agent cards** | Glass cards that tilt toward the pointer, light their border under the cursor, and glow by status (Active, Training, Idle). In the workspace a card shows Active only while that agent is really generating a reply. The landing page's deck shows all three states as a preview. |
+| **Landing page** | Staggered holographic hero, a pinned scroll story (GSAP ScrollTrigger), a bento grid of live feature blocks, counted stats and a scroll-drawn architecture diagram. |
+| **Live workspace** | A typing pulse before the first token, a waveform driven by the real streaming rate, and a node graph of the agents handing work to each other while a workflow runs. |
+
+### Visual effects, tiers and performance
+
+Effects adapt to the device. The tier is decided by `lib/fx/capability.ts`:
+
+| Tier | When | What runs |
+| --- | --- | --- |
+| `high` | Capable desktop | Everything above. |
+| `low` | Phones and tablets, small screens, 2 cores or less, 2 GB or less, data-saver, or chosen by the user | Fewer nodes, no travelling pulses, lower resolution, no backdrop blur. (The custom cursor only ever runs with a mouse, so touch devices never get it.) |
+| `off` | Reduced-motion preference, no WebGL, or chosen by the user | No canvases and no custom cursor; a static SVG of the network instead. The reduced-motion preference also turns off the pinned scroll story and count-up, and shows final values. |
+
+Change it from the command palette (**Visual effects**: auto, lite, off), or force it for testing with `?fx=high|low|off`.
+
+How it stays smooth:
+- All per-frame motion (drift, twinkle, cursor push, pulses) runs in the vertex and fragment shaders. The CPU only updates a few uniforms and the camera each frame.
+- Links are one `LineSegments` and nodes one `Points`: two draw calls for the whole swarm.
+- The 3D code (`three`, React Three Fiber, drei) is a separate chunk loaded after first paint, and everything below the hero loads as its own chunk. The static network shows until the first WebGL frame is ready.
+- The hero orb stops rendering (0 draw calls) when scrolled out of view. Behind the workspace the swarm is capped at 30 fps.
+- drei's `PerformanceMonitor` watches real frame times and sheds nodes and resolution on a device that can't hold the frame rate.
+- The cursor loop sleeps as soon as everything has settled. Pointer and scroll state is shared mutable data, so moving the mouse never triggers a React render.
+
+Not measured: the test environment renders WebGL in software, so the repo can prove the scenes draw, react and pause correctly, but not that a given GPU holds 60 fps. Check that on the devices you care about.
 
 ## What's in the workspace
 
@@ -27,9 +63,13 @@ Other keys: `Esc` closes dialogs and menus · `⌘/Ctrl + N` or `Alt + N` starts
 ├── client/              # React + TypeScript + Tailwind source (Vite)
 │   └── src/
 │       ├── components/  # CommandPalette, SlashCommandMenu, ThoughtStream, AgentCreator, AgentExportModal, …
-│       ├── hooks/       # useChat (per-agent streaming threads), useFocusTrap
+│       │   ├── landing/ # Hero, Story, BentoGrid, Architecture, Stats, AgentDeck, …
+│       │   └── fx/      # NeuralScene, OrbScene (R3F), CustomCursor, Magnetic, TiltCard, Waveform, CollabGraph, …
+│       ├── hooks/       # useChat (per-agent streaming threads), useFocusTrap, useScrollFx (GSAP), useStreamActivity
 │       └── lib/         # agent file import/export, chat export, SSE parser, fuzzy search, templates
-├── e2e/features.mjs     # browser test of all the features (Playwright)
+│           └── fx/      # network generator, effects tiers, GLSL shaders, shared pointer state
+├── e2e/features.mjs     # browser test of the 7 workspace features (Playwright)
+├── e2e/visual.mjs       # browser test of the 3D, cursor, scroll and fallback behaviour (Playwright)
 ├── public/              # build output — generated by `npm run build`, not committed
 ├── render.yaml  railway.toml  vercel.json  Dockerfile
 ```
@@ -64,12 +104,13 @@ npm test             # unit tests (agent file validation, chat export, SSE parse
 npm run typecheck    # strict TypeScript
 ```
 
-`e2e/features.mjs` drives a real browser through every feature, including the failure paths (bad JSON, oversize files, server errors). It needs Playwright, which is deliberately not an app dependency:
+`e2e/features.mjs` drives a real browser through every workspace feature, including the failure paths (bad JSON, oversize files, server errors). `e2e/visual.mjs` covers the redesign with WebGL on: the 3D scenes, cursor snapping, magnetic and tilt interactions, the scroll story, bento blocks, live workspace effects, render-loop pausing (counted as GPU draw calls), and the reduced-motion and phone fallbacks. They need Playwright, which is deliberately not an app dependency:
 
 ```bash
 npx playwright install chromium
 PORT=3801 node server.js &
 BASE_URL=http://127.0.0.1:3801 node e2e/features.mjs
+BASE_URL=http://127.0.0.1:3801 node e2e/visual.mjs      # SHOTS_DIR=/some/dir also saves screenshots
 ```
 
 ## Configuration

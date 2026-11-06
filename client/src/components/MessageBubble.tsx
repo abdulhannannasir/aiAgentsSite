@@ -4,6 +4,7 @@ import { AlertTriangle } from 'lucide-react';
 import { AgentAvatar } from './AgentAvatar';
 import { Markdown } from './Markdown';
 import { ThoughtStream } from './ThoughtStream';
+import { TypingPulse } from './fx/TypingPulse';
 import type { ActiveAgent, Message } from '../types';
 
 const time = (t: number) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -23,9 +24,9 @@ export const MessageBubble = memo(function MessageBubble({ message, agent }: { m
       data-status={message.status}
     >
       {!isUser && <div className="mt-1"><AgentAvatar icon={agent.icon} gradient={agent.gradient} size={32} /></div>}
-      <div className={`min-w-0 max-w-[92%] rounded-2xl border border-line p-4 shadow-sm sm:max-w-[82%] ${isUser ? 'rounded-tr-sm bg-[var(--bubble-user)]' : 'rounded-tl-sm bg-[var(--bubble-ai)]'}`}>
+      <div className={`min-w-0 max-w-[92%] rounded-2xl border p-4 shadow-sm transition-shadow sm:max-w-[82%] ${isUser ? 'rounded-tr-sm border-line bg-[var(--bubble-user)]' : 'rounded-tl-sm bg-[var(--bubble-ai)]'} ${!isUser && streaming ? 'border-neon-cyan/40 shadow-glow-cyan' : 'border-line'}`}>
         <div className="mb-1 flex items-baseline justify-between gap-4">
-          <span className={`text-xs font-bold ${isUser ? 'text-muted' : 'text-accent'}`}>{isUser ? 'You' : agent.name}</span>
+          <span className={`font-display text-xs font-bold ${isUser ? 'text-muted' : 'text-accent'}`}>{isUser ? 'You' : agent.name}</span>
           <span className="text-[10px] text-muted">{time(message.createdAt)}</span>
         </div>
 
@@ -35,7 +36,8 @@ export const MessageBubble = memo(function MessageBubble({ message, agent }: { m
           <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{message.content}</p>
         ) : (
           <>
-            {(message.content || streaming) && (
+            {streaming && !message.content && <TypingPulse label={(message.trace?.length ?? 0) > 1 ? 'Agents collaborating' : 'Thinking'} />}
+            {message.content && (
               <div>
                 <Markdown text={message.content} streaming={streaming} />
                 {streaming && <span aria-hidden className="animate-caret-blink text-accent">▍</span>}

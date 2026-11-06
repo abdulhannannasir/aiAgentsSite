@@ -78,7 +78,7 @@ function Palette({ commands, onClose }: { commands: Command[]; onClose: () => vo
                 onClick={() => run(c)}
                 className={`flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm ${isActive ? 'bg-accent/10' : ''}`}
               >
-                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${isActive ? 'bg-accent text-white' : 'bg-hover text-muted'}`}>{c.icon}</span>
+                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${isActive ? 'bg-accent text-on-accent' : 'bg-hover text-muted'}`}>{c.icon}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{c.label}</span>
                   {c.hint && <span className="block truncate text-xs text-muted">{c.hint}</span>}

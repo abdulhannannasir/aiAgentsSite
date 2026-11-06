@@ -39,7 +39,7 @@ export function AgentExportModal({ draft, onClose }: Props) {
           <button type="button" onClick={copy} className="glass flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-medium transition hover:bg-hover">
             <Copy size={15} aria-hidden /> Copy JSON
           </button>
-          <button type="button" data-autofocus onClick={download} className="flex items-center gap-2 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-white transition hover:brightness-110 active:scale-95">
+          <button type="button" data-autofocus onClick={download} className="flex items-center gap-2 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-on-accent transition hover:brightness-110 active:scale-95">
             <Download size={15} aria-hidden /> Download .json
           </button>
         </div>

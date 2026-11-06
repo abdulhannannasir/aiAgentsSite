@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, Check, ChevronDown, Clock, Loader2, Workflow } from 'lucide-react';
+import { CollabGraph } from './fx/CollabGraph';
 import type { StepStatus, TraceStep } from '../types';
 
 const BADGE: Record<StepStatus, { label: string; cls: string }> = {
@@ -82,6 +83,11 @@ export function ThoughtStream({ steps, running }: Props) {
             transition={{ duration: 0.22, ease: 'easeOut' }}
             className="overflow-hidden"
           >
+            {steps.length > 1 && !running && (
+              <div className="px-3 pt-3">
+                <CollabGraph compact steps={steps.map(s => ({ id: s.id, icon: s.agentIcon, role: s.role, name: s.agentName, status: s.status }))} />
+              </div>
+            )}
             <ol className="space-y-0 px-3 pb-3 pt-1">
               {steps.map((s, i) => {
                 const hasOutput = s.output.trim().length > 0;

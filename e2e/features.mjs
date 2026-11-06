@@ -35,7 +35,7 @@ const dialog = name => page.getByRole('dialog', { name });
 const opens = name => dialog(name).waitFor({ timeout: 5000 }).then(() => true, () => false);
 const closes = name => dialog(name).waitFor({ state: 'detached', timeout: 5000 }).then(() => true, () => false);
 
-await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+await page.goto(BASE + '/?fx=off#/app', { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('[data-agent]');
 check('app loads: 42 built-in agents, demo badge', (await page.locator('[data-agent]').count()) === 42 && /Demo mode/.test(await page.getByTestId('mode-badge').textContent()));
 
@@ -272,7 +272,7 @@ await page.unroute('**/api/chat');
 // ============ responsive ============
 const m = await (await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })).newPage();
 const mErrors = []; m.on('pageerror', e => mErrors.push(e.message));
-await m.goto(BASE, { waitUntil: 'domcontentloaded' }); await m.waitForSelector('[data-agent]'); await sleep(500);
+await m.goto(BASE + '/?fx=off#/app', { waitUntil: 'domcontentloaded' }); await m.waitForSelector('[data-agent]'); await sleep(500);
 check('R  mobile: agent list first, no horizontal overflow', (await m.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0 && await m.locator('[data-agent]').first().isVisible());
 await shot(m, 'r1-mobile-home');
 await m.getByTestId('palette-button').tap();
