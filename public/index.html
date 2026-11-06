@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="AgentVerse — 42 pre-made AI agents for support, coding, content, sales, legal, business and daily life.">
+  <meta name="theme-color" content="#0b0c10">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>AgentVerse | AI Agent Platform</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/11.1.1/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.8/purify.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-jsx.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
+
+  <script type="importmap">
+    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+  </script>
+
+  <style>
+    * { -webkit-tap-highlight-color: transparent; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; background: #0b0c10; color: #f8fafc; overflow-x: hidden; min-height: 100vh; min-height: 100dvh; }
+    .glass-ios { background: rgba(255,255,255,0.05); backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%); border: 1px solid rgba(255,255,255,0.07); }
+    .icon-squircle { border-radius: 20px; width: 48px; height: 48px; display: flex; align-items: center; justify-content: center; font-size: 24px; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12), 0 12px 32px rgba(0,0,0,0.4); }
+    .glass-card { transition: all 0.35s cubic-bezier(0.4,0,0.2,1); position: relative; overflow: hidden; }
+    .glass-card::before { content:''; position:absolute; inset:0; background:linear-gradient(135deg,rgba(255,255,255,0.03),transparent); opacity:0; transition:opacity 0.3s; pointer-events:none; }
+    .glass-card:hover::before { opacity:1; }
+    .glass-card:hover { transform: translateY(-4px); border-color: rgba(255,255,255,0.2); box-shadow: 0 20px 40px -10px rgba(0,0,0,0.5); }
+    .glass-card:focus-visible { outline: 2px solid #60a5fa; outline-offset: 2px; }
+    .agent-selected { border-color: #3b82f6 !important; background: rgba(59,130,246,0.12); box-shadow: 0 0 30px rgba(59,130,246,0.18); }
+    .agent-selected::before { opacity:1; background:linear-gradient(135deg,rgba(59,130,246,0.2),transparent); }
+    .msg-enter { animation: msgFade 0.45s cubic-bezier(0.16,1,0.3,1) both; }
+    @keyframes msgFade { from { opacity:0; transform: translateY(12px);} to { opacity:1; transform: translateY(0);} }
+    .typing-dot { animation: bounce 1.4s infinite ease-in-out both; }
+    .typing-dot:nth-child(2){animation-delay:0.15s}.typing-dot:nth-child(3){animation-delay:0.3s}
+    @keyframes bounce { 0%,80%,100%{transform:translateY(0)} 40%{transform:translateY(-6px)} }
+    #canvas-container { position:fixed; inset:0; z-index:0; pointer-events:none; }
+    .no-scrollbar::-webkit-scrollbar { display:none; }
+    .no-scrollbar { -ms-overflow-style:none; scrollbar-width:none; }
+    .badge-popular { position:absolute; top:12px; right:12px; background:#3b82f6; color:white; font-size:10px; padding:2px 8px; border-radius:20px; font-weight:700; z-index:10; box-shadow:0 4px 12px rgba(59,130,246,0.4); }
+
+    /* Rendered markdown inside chat bubbles (Tailwind's reset strips these) */
+    .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+    .md p { margin: 0.5em 0; line-height: 1.6; }
+    .md ul { list-style: disc; padding-left: 1.25rem; margin: 0.5em 0; }
+    .md ol { list-style: decimal; padding-left: 1.25rem; margin: 0.5em 0; }
+    .md h1, .md h2, .md h3, .md h4 { font-weight: 700; margin: 0.8em 0 0.3em; }
+    .md h1 { font-size: 1.15em; } .md h2 { font-size: 1.08em; }
+    .md a { color: #60a5fa; text-decoration: underline; }
+    .md blockquote { border-left: 3px solid rgba(255,255,255,0.2); padding-left: 0.75rem; color: #94a3b8; margin: 0.5em 0; }
+    .md :not(pre) > code { background: rgba(255,255,255,0.08); padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.9em; }
+    .md table { border-collapse: collapse; margin: 0.5em 0; } .md th, .md td { border: 1px solid rgba(255,255,255,0.12); padding: 4px 8px; }
+    pre[class*="language-"], .md pre { padding:1em; margin:0.5em 0; overflow:auto; border-radius:8px; background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.05); font-size: 0.85em; }
+
+    @media (prefers-reduced-motion: reduce) { .msg-enter, .typing-dot { animation: none; } .glass-card { transition: none; } }
+  </style>
+</head>
+<body class="text-slate-200 selection:bg-blue-500 selection:text-white relative">
+
+  <div id="canvas-container" aria-hidden="true"></div>
+
+  <header class="sticky top-0 z-30 glass-ios border-b border-white/5 px-4 sm:px-6 py-3">
+    <div class="max-w-7xl mx-auto flex justify-between items-center gap-3">
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="icon-squircle glass-ios shrink-0">🤖</div>
+        <div class="min-w-0">
+          <h1 class="text-lg font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400 tracking-tight">AgentVerse</h1>
+          <p class="text-xs text-slate-400 truncate"><span id="agent-count">42</span> Pre-Made AI Agents • Ready to Use</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3 shrink-0">
+        <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full glass-ios text-xs text-slate-300 border border-white/10">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span id="status-badge">Online</span>
+        </div>
+        <button type="button" onclick="location.reload()" class="px-4 py-2 rounded-lg glass-ios text-sm font-medium hover:bg-white/10 transition border border-white/10">New Session</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="relative z-20 max-w-7xl mx-auto px-4 sm:px-6 py-6 lg:py-8">
+    <div class="grid grid-cols-12 gap-6 lg:h-[calc(100dvh-170px)] lg:min-h-[650px]">
+
+      <!-- Left: Categories + Agents -->
+      <section class="col-span-12 lg:col-span-4 flex flex-col gap-4 min-h-0 lg:h-full" aria-label="Agents">
+        <div class="glass-ios rounded-2xl p-5 border border-white/10 shadow-xl">
+          <h3 class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4">Categories</h3>
+          <div class="flex flex-wrap gap-2" id="category-list"></div>
+        </div>
+
+        <div class="glass-ios rounded-2xl p-5 border border-white/10 shadow-xl flex-1 flex flex-col min-h-0 max-h-[480px] lg:max-h-none">
+          <div class="flex justify-between items-end mb-5 gap-3">
+            <div class="min-w-0">
+              <h2 class="text-lg font-bold truncate" id="section-title">All Agents</h2>
+              <p class="text-xs text-slate-400 mt-1" id="section-desc">Most popular first</p>
+            </div>
+            <div class="flex items-center gap-2 px-2 py-1 rounded-full glass-ios text-xs shrink-0">
+              <span class="w-2 h-2 rounded-full bg-blue-500"></span>
+              <span class="text-slate-400">Popular</span>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 auto-rows-max content-start gap-3 overflow-y-auto no-scrollbar pr-1 flex-1 min-h-0" id="agent-grid"></div>
+        </div>
+      </section>
+
+      <!-- Right: Chat -->
+      <section class="col-span-12 lg:col-span-8 flex flex-col min-h-0 lg:h-full" aria-label="Chat">
+        <div id="empty-state" class="flex-1 flex flex-col items-center justify-center text-slate-500 px-4 sm:px-8 py-12">
+          <div class="w-24 h-24 rounded-full glass-ios flex items-center justify-center text-5xl mb-6 shadow-2xl border border-white/10">👋</div>
+          <h3 class="text-2xl font-bold mb-2 text-slate-300">Select an AI Agent</h3>
+          <p class="text-sm max-w-xs text-center mb-8">Choose a template to start chatting.</p>
+          <div class="glass-ios rounded-2xl p-6 text-left w-full max-w-md border border-white/10">
+            <h4 class="font-bold text-slate-200 mb-3">What can these agents do?</h4>
+            <ul class="text-xs text-slate-400 space-y-2 list-disc list-inside">
+              <li>Resolve customer support tickets</li>
+              <li>Write, debug, and optimize code</li>
+              <li>Generate marketing copy and social posts</li>
+              <li>Analyze data and write SQL/Python</li>
+              <li>Manage business, law firm, and personal tasks</li>
+            </ul>
+          </div>
+        </div>
+
+        <div id="chat-container" class="hidden flex-1 flex flex-col h-[75dvh] lg:h-full glass-ios rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
+          <div class="p-4 sm:p-5 border-b border-white/5 flex items-center justify-between glass-ios gap-3">
+            <div class="flex items-center gap-3 min-w-0">
+              <div id="agent-avatar" class="w-11 h-11 rounded-2xl flex shrink-0 items-center justify-center text-2xl shadow-xl ring-2 ring-white/10">🤖</div>
+              <div class="min-w-0">
+                <h3 id="agent-name" class="font-bold text-base leading-tight truncate">Agent Name</h3>
+                <p id="agent-role" class="text-xs text-slate-400 leading-tight truncate">Category • Use case</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_#10b981]"></div>
+              <span class="text-xs text-slate-400 font-medium">Online</span>
+            </div>
+          </div>
+
+          <div id="messages" class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 no-scrollbar" aria-live="polite"></div>
+
+          <div class="p-4 sm:p-5 border-t border-white/5 bg-black/30">
+            <div class="relative max-w-4xl mx-auto">
+              <input type="text" id="user-input" maxlength="4000" placeholder="Ask your agent anything..." aria-label="Message"
+                class="w-full pl-5 pr-14 py-4 text-base rounded-2xl glass-ios text-white placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all disabled:opacity-60" autocomplete="off">
+              <button type="button" id="send-btn" aria-label="Send message"
+                class="absolute right-3 top-1/2 -translate-y-1/2 p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition active:scale-95 disabled:opacity-40">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div id="typing" class="fixed bottom-24 left-1/2 -translate-x-1/2 hidden p-3 rounded-2xl glass-ios border border-white/10 z-30 shadow-2xl" aria-label="Agent is typing">
+    <div class="flex items-center gap-1.5">
+      <span class="typing-dot w-1.5 h-1.5 bg-blue-400 rounded-full shadow-[0_0_6px_#3b82f6]"></span>
+      <span class="typing-dot w-1.5 h-1.5 bg-blue-400 rounded-full shadow-[0_0_6px_#3b82f6]"></span>
+      <span class="typing-dot w-1.5 h-1.5 bg-blue-400 rounded-full shadow-[0_0_6px_#3b82f6]"></span>
+    </div>
+  </div>
+
+  <script type="module">
+    const $ = id => document.getElementById(id);
+    const els = {
+      categoryList: $('category-list'), agentGrid: $('agent-grid'),
+      emptyState: $('empty-state'), chatContainer: $('chat-container'),
+      messages: $('messages'), userInput: $('user-input'), sendBtn: $('send-btn'),
+      agentName: $('agent-name'), agentRole: $('agent-role'), agentAvatar: $('agent-avatar'),
+      sectionTitle: $('section-title'), sectionDesc: $('section-desc'), typing: $('typing')
+    };
+    const state = { agents: [], categories: [], selectedAgent: null, sessionId: null, categoryFilter: 'all', busy: false };
+
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const newId = () => (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
+
+    // Open chat links in a new tab, safely.
+    if (window.DOMPurify) {
+      DOMPurify.addHook('afterSanitizeAttributes', node => {
+        if (node.tagName === 'A') { node.setAttribute('target', '_blank'); node.setAttribute('rel', 'noopener noreferrer'); }
+      });
+    }
+    // Model output is untrusted: always sanitize. If the CDN libs failed to load, fall back to plain text.
+    function renderMarkdown(text) {
+      try {
+        if (window.marked && window.DOMPurify) return DOMPurify.sanitize(marked.parse(text));
+      } catch { /* fall through */ }
+      return `<p style="white-space:pre-wrap">${esc(text)}</p>`;
+    }
+
+    async function init() {
+      try {
+        const [agentsRes, healthRes] = await Promise.all([fetch('/api/agents'), fetch('/api/health').catch(() => null)]);
+        state.agents = await agentsRes.json();
+        if (healthRes && healthRes.ok) {
+          const h = await healthRes.json();
+          $('status-badge').textContent = h.mode === 'live' ? 'Live AI' : 'Demo mode';
+        }
+      } catch {
+        els.agentGrid.innerHTML = '<p class="text-sm text-slate-400">Could not load agents. Please refresh.</p>';
+        return;
+      }
+      $('agent-count').textContent = state.agents.length;
+      state.categories = ['all', ...new Set(state.agents.map(a => a.category))];
+      renderCategories();
+      renderAgents();
+      setupEvents();
+      initThree(); // decorative; never blocks the app
+    }
+
+    function renderCategories() {
+      els.categoryList.innerHTML = state.categories.map(cat => {
+        const active = cat === state.categoryFilter;
+        return `<button type="button" data-cat="${esc(cat)}" aria-pressed="${active}" class="px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-200 ${active
+          ? 'bg-blue-500 text-white shadow-[0_0_10px_rgba(59,130,246,0.4)]'
+          : 'bg-white/5 text-slate-300 hover:bg-white/10 border border-white/5 hover:text-white'}">${cat === 'all' ? 'All' : esc(cat)}</button>`;
+      }).join('');
+    }
+
+    function renderAgents() {
+      const inCat = state.categoryFilter === 'all' ? state.agents : state.agents.filter(a => a.category === state.categoryFilter);
+      const list = [...inCat].sort((a, b) => Number(b.mostUsed) - Number(a.mostUsed)); // popular first (stable)
+      els.sectionTitle.textContent = state.categoryFilter === 'all' ? 'All Agents' : state.categoryFilter;
+      els.sectionDesc.textContent = `${list.length} agent${list.length === 1 ? '' : 's'} • popular first`;
+      els.agentGrid.innerHTML = list.map(agent => `
+        <div role="button" tabindex="0" data-agent="${esc(agent.id)}" aria-label="Chat with ${esc(agent.name)}"
+             class="agent-card glass-card cursor-pointer p-5 rounded-2xl group border border-white/5 ${state.selectedAgent?.id === agent.id ? 'agent-selected' : ''}">
+          ${agent.mostUsed ? '<span class="badge-popular">Popular</span>' : ''}
+          <div class="w-12 h-12 mb-3 rounded-xl bg-gradient-to-br ${esc(agent.gradient)} flex items-center justify-center text-2xl shadow-lg group-hover:scale-110 transition-transform duration-300 border border-white/20">${esc(agent.icon)}</div>
+          <h4 class="font-bold text-sm mb-1 leading-tight group-hover:text-white transition-colors">${esc(agent.name)}</h4>
+          <p class="text-xs text-slate-400 mb-4 line-clamp-2 leading-relaxed">${esc(agent.description)}</p>
+          <div class="flex items-center justify-between gap-2 text-xs"><span class="text-slate-500 truncate">${esc(agent.category)}</span><span class="text-blue-400 truncate">${esc(agent.useCase)}</span></div>
+        </div>`).join('');
+    }
+
+    function selectAgent(id) {
+      const agent = state.agents.find(a => a.id === id);
+      if (!agent) return;
+      state.selectedAgent = agent;
+      state.sessionId = null; // fresh conversation per agent
+
+      els.agentGrid.querySelectorAll('.agent-card').forEach(c => c.classList.toggle('agent-selected', c.dataset.agent === id));
+      els.emptyState.classList.add('hidden');
+      els.chatContainer.classList.remove('hidden');
+      els.agentName.textContent = agent.name;
+      els.agentRole.textContent = `${agent.category} • ${agent.useCase}`;
+      els.agentAvatar.textContent = agent.icon;
+      els.agentAvatar.className = `w-11 h-11 rounded-2xl flex shrink-0 items-center justify-center text-2xl shadow-xl ring-2 ring-white/10 bg-gradient-to-br ${agent.gradient}`;
+      els.messages.innerHTML = `<div id="chat-hint" class="h-full flex items-center justify-center text-sm text-slate-500 text-center px-6">Say hello to ${esc(agent.name)} to get started.</div>`;
+      els.userInput.focus({ preventScroll: true });
+
+      if (window.matchMedia('(max-width: 1023px)').matches) {
+        els.chatContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+
+    function scrollToBottom() { els.messages.scrollTop = els.messages.scrollHeight; }
+
+    // Builds one chat bubble and returns its body element.
+    function createMessage(role) {
+      const isUser = role === 'user';
+      const a = state.selectedAgent;
+      const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const wrap = document.createElement('div');
+      wrap.className = `flex gap-3 msg-enter ${isUser ? 'justify-end' : ''}`;
+      wrap.innerHTML = `${isUser ? '' : `<div class="w-8 h-8 rounded-lg bg-gradient-to-br ${esc(a.gradient)} flex shrink-0 items-center justify-center text-sm shadow mt-1">${esc(a.icon)}</div>`}
+        <div class="${isUser ? 'bg-slate-800 rounded-tr-none' : 'bg-white/5 rounded-tl-none'} text-slate-200 text-sm p-4 rounded-2xl max-w-[88%] sm:max-w-[80%] min-w-0 border border-white/5 shadow-lg">
+          <div class="flex justify-between items-start gap-4 mb-1">
+            <span class="font-bold text-xs ${isUser ? 'text-slate-300' : 'text-blue-400'}">${isUser ? 'You' : esc(a.name)}</span>
+            <span class="text-[10px] text-slate-500">${time}</span>
+          </div>
+          <div class="msg-body md break-words"></div>
+        </div>`;
+      els.messages.appendChild(wrap);
+      return wrap.querySelector('.msg-body');
+    }
+
+    function showError(text) {
+      const body = createMessage('assistant');
+      body.textContent = `⚠️ ${text}`;
+      scrollToBottom();
+    }
+
+    function setBusy(busy) {
+      state.busy = busy;
+      els.userInput.disabled = busy;
+      els.sendBtn.disabled = busy;
+    }
+
+    async function sendMessage() {
+      const text = els.userInput.value.trim();
+      if (!text || !state.selectedAgent || state.busy) return;
+      setBusy(true);
+      els.userInput.value = '';
+      $('chat-hint')?.remove();
+
+      const userBody = createMessage('user');
+      userBody.style.whiteSpace = 'pre-wrap';
+      userBody.textContent = text; // plain text — never HTML
+      scrollToBottom();
+
+      els.typing.classList.remove('hidden');
+      if (!state.sessionId) state.sessionId = newId();
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: state.sessionId, agentId: state.selectedAgent.id, message: text })
+        });
+        if (res.status === 429) throw new Error('You are sending messages too fast. Please wait a minute.');
+        if (!res.ok || !res.body) throw new Error(`Chat failed (${res.status}). Please try again.`);
+
+        const aiBody = createMessage('assistant');
+        let content = '';
+        let errored = false;
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        const handle = evt => {
+          if (evt.type === 'stream') {
+            els.typing.classList.add('hidden');
+            content += evt.content;
+            aiBody.innerHTML = renderMarkdown(content);
+            scrollToBottom();
+          } else if (evt.type === 'error') {
+            errored = true;
+            aiBody.insertAdjacentHTML('beforeend', `<p>⚠️ ${esc(evt.content)}</p>`);
+          }
+        };
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split('\n\n');
+          buffer = events.pop(); // keep the unfinished tail for the next read
+          for (const raw of events) {
+            const line = raw.trim();
+            if (!line.startsWith('data: ')) continue;
+            try { handle(JSON.parse(line.slice(6))); } catch { /* skip malformed event */ }
+          }
+        }
+        if (window.Prism) Prism.highlightAllUnder(aiBody);
+        if (!content && !errored) aiBody.textContent = '(No response)';
+      } catch (err) {
+        console.error(err);
+        showError(err.message || 'Something went wrong. Please try again.');
+      } finally {
+        els.typing.classList.add('hidden');
+        setBusy(false);
+        els.userInput.focus({ preventScroll: true });
+        scrollToBottom();
+      }
+    }
+
+    function setupEvents() {
+      els.categoryList.addEventListener('click', e => {
+        const btn = e.target.closest('[data-cat]');
+        if (!btn) return;
+        state.categoryFilter = btn.dataset.cat;
+        renderCategories();
+        renderAgents();
+        els.agentGrid.scrollTop = 0;
+      });
+      els.agentGrid.addEventListener('click', e => {
+        const card = e.target.closest('[data-agent]');
+        if (card) selectAgent(card.dataset.agent);
+      });
+      els.agentGrid.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        const card = e.target.closest('[data-agent]');
+        if (card) { e.preventDefault(); selectAgent(card.dataset.agent); }
+      });
+      els.sendBtn.addEventListener('click', sendMessage);
+      els.userInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendMessage(); }
+      });
+    }
+
+    // ---- Decorative 3D background (optional; the app works without it) ----
+    async function initThree() {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+      try {
+        const THREE = await import('three');
+        const container = $('canvas-container');
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x0b0c10, 0.015);
+        const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 1000);
+        camera.position.set(0, 2, 15); // far enough that orbiting nodes never pass right in front of the lens
+        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'high-performance' });
+        renderer.setSize(innerWidth, innerHeight);
+        renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+        container.appendChild(renderer.domElement);
+
+        // Star field
+        const count = innerWidth < 768 ? 800 : 2000;
+        const pos = new Float32Array(count * 3);
+        for (let i = 0; i < pos.length; i++) pos[i] = (Math.random() - 0.5) * 30;
+        const starGeo = new THREE.BufferGeometry();
+        starGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        const particles = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0x6366f1, size: 0.025, transparent: true, opacity: 0.7 }));
+        scene.add(particles);
+
+        // Floating "agent" nodes
+        const colors = [0x3b82f6, 0x10b981, 0xf59e0b, 0x8b5cf6, 0xec4899, 0x06b6d4, 0xf97316, 0xa855f7];
+        const nodeGeo = new THREE.IcosahedronGeometry(0.3, 1);
+        const nodes = colors.map(color => {
+          const mesh = new THREE.Mesh(nodeGeo, new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.6, roughness: 0.2, metalness: 0.1 }));
+          mesh.userData = { speed: 0.3 + Math.random() * 0.5, floatOffset: Math.random() * Math.PI * 2, orbitRadius: 4 + Math.random() * 6, angle: Math.random() * Math.PI * 2, baseY: (Math.random() - 0.5) * 6 };
+          scene.add(mesh);
+          return mesh;
+        });
+
+        // One LineSegments object, updated in place each frame (no per-frame allocation)
+        const pairs = [];
+        for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) pairs.push([nodes[i], nodes[j]]);
+        const linePos = new Float32Array(pairs.length * 6);
+        const lineGeo = new THREE.BufferGeometry();
+        lineGeo.setAttribute('position', new THREE.BufferAttribute(linePos, 3));
+        const lines = new THREE.LineSegments(lineGeo, new THREE.LineBasicMaterial({ color: 0x3b82f6, transparent: true, opacity: 0.15 }));
+        lines.frustumCulled = false;
+        scene.add(lines);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const point = new THREE.PointLight(0x3b82f6, 2, 30);
+        point.position.set(5, 5, 5);
+        scene.add(point);
+
+        addEventListener('resize', () => {
+          camera.aspect = innerWidth / innerHeight;
+          camera.updateProjectionMatrix();
+          renderer.setSize(innerWidth, innerHeight);
+        });
+
+        const animate = () => {
+          requestAnimationFrame(animate);
+          const t = performance.now() * 0.001;
+          scene.rotation.y += 0.0006; // slow auto-rotate
+          particles.rotation.y = t * 0.03;
+          particles.rotation.x = Math.sin(t * 0.2) * 0.05;
+          for (const n of nodes) {
+            const u = n.userData;
+            u.angle += 0.005 * u.speed;
+            n.position.set(Math.cos(u.angle) * u.orbitRadius, u.baseY + Math.sin(t * u.speed + u.floatOffset) * 0.6, Math.sin(u.angle) * u.orbitRadius);
+            n.rotation.y += 0.015;
+            n.rotation.x += 0.01;
+          }
+          pairs.forEach(([a, b], k) => {
+            linePos.set([a.position.x, a.position.y, a.position.z, b.position.x, b.position.y, b.position.z], k * 6);
+          });
+          lineGeo.attributes.position.needsUpdate = true;
+          renderer.render(scene, camera);
+        };
+        animate();
+      } catch (err) {
+        console.warn('3D background disabled:', err.message);
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
