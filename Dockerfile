@@ -1,13 +1,19 @@
-FROM node:20-alpine
+# ---- build the React front end ----
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
 
+# ---- slim runtime image: just the Express server + the built front end ----
+FROM node:20-alpine
 WORKDIR /app
 ENV NODE_ENV=production
-
-# Install dependencies first so Docker can cache this layer
 COPY package*.json ./
 RUN npm ci --omit=dev
-
-COPY . .
+COPY server.js workflows.js ./
+COPY --from=build /app/public ./public
 
 USER node
 EXPOSE 3000

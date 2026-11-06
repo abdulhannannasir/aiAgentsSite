@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
+const { WORKFLOWS } = require('./workflows');
 
 // Tiny .env loader (no extra dependency). Real environment variables always win.
 try {
@@ -232,6 +233,7 @@ async function* streamOpenAI(agent, messages, signal) {
     body: JSON.stringify({
       model: OPENAI_MODEL,
       stream: true,
+      ...(agent.temperature != null && { temperature: agent.temperature }),
       messages: [{ role: 'system', content: agent.systemPrompt }, ...messages]
     })
   });
@@ -323,6 +325,7 @@ async function openGeminiStream(agent, messages, signal) {
   const headers = { 'x-goog-api-key': GEMINI_API_KEY, 'Content-Type': 'application/json' };
   const body = JSON.stringify({
     systemInstruction: { parts: [{ text: agent.systemPrompt }] },
+    ...(agent.temperature != null && { generationConfig: { temperature: agent.temperature } }),
     contents: toGeminiContents(messages)
   });
   const startedAt = Date.now();
@@ -417,7 +420,19 @@ async function* streamGemini(agent, messages, signal) {
 
 const STREAMERS = { openai: streamOpenAI, gemini: streamGemini };
 
-async function* callLLM(agent, messages, signal) {
+// Streams canned text word by word (demo mode, and the fallback when a provider fails).
+async function* streamDemoText(text, signal) {
+  const words = text.split(' ');
+  for (let i = 0; i < words.length; i++) {
+    if (signal?.aborted) return;
+    yield words[i] + (i < words.length - 1 ? ' ' : '');
+    await new Promise(r => setTimeout(r, 20 + Math.random() * 30));
+  }
+}
+
+// With { strict: true } a provider failure is thrown instead of quietly replaced by demo text,
+// so callers that need real output (workflow steps) can report the failure honestly.
+async function* callLLM(agent, messages, signal, { strict = false } = {}) {
   const stream = STREAMERS[PROVIDER];
   if (stream) {
     let started = false;
@@ -431,18 +446,13 @@ async function* callLLM(agent, messages, signal) {
     } catch (err) {
       if (signal?.aborted) return;
       console.error(`${PROVIDER} error:`, err.message);
-      if (started) throw err; // can't cleanly switch to demo mid-reply
+      if (started || strict) throw err; // can't cleanly switch to demo mid-reply (or the caller wants the error)
       // nothing sent yet -> fall through to demo reply
     }
   }
 
   const last = messages[messages.length - 1]?.content || '';
-  const words = buildDemoResponse(agent, last).split(' ');
-  for (let i = 0; i < words.length; i++) {
-    if (signal?.aborted) return;
-    yield words[i] + (i < words.length - 1 ? ' ' : '');
-    await new Promise(r => setTimeout(r, 20 + Math.random() * 30));
-  }
+  yield* streamDemoText(buildDemoResponse(agent, last), signal);
 }
 
 // ============================
@@ -459,15 +469,23 @@ const cleanup = setInterval(() => {
 }, 10 * 60 * 1000);
 cleanup.unref();
 
-function rateLimit(req, res, next) {
+// Records `cost` requests for this IP, or returns false (recording nothing) if that would go over the limit.
+function chargeRate(ip, cost) {
   const now = Date.now();
-  const hits = (hitsByIp.get(req.ip) || []).filter(t => t > now - RATE_LIMIT.windowMs);
-  if (hits.length >= RATE_LIMIT.max) {
-    res.set('Retry-After', String(Math.ceil(RATE_LIMIT.windowMs / 1000)));
-    return res.status(429).json({ error: 'Too many requests — please wait a minute.' });
-  }
-  hits.push(now);
-  hitsByIp.set(req.ip, hits);
+  const hits = (hitsByIp.get(ip) || []).filter(t => t > now - RATE_LIMIT.windowMs);
+  if (hits.length + cost > RATE_LIMIT.max) return false;
+  for (let i = 0; i < cost; i++) hits.push(now);
+  hitsByIp.set(ip, hits);
+  return true;
+}
+
+function tooManyRequests(res) {
+  res.set('Retry-After', String(Math.ceil(RATE_LIMIT.windowMs / 1000)));
+  return res.status(429).json({ error: 'Too many requests — please wait a minute.' });
+}
+
+function rateLimit(req, res, next) {
+  if (!chargeRate(req.ip, 1)) return tooManyRequests(res);
   next();
 }
 
@@ -483,6 +501,107 @@ app.get('/api/agents/:id', (req, res) => {
   if (!agent) return res.status(404).json({ error: 'Not found' });
   res.json(agent);
 });
+
+// ============================
+//  WORKFLOWS + CUSTOM AGENTS
+// ============================
+for (const w of WORKFLOWS) {
+  for (const s of w.steps) {
+    if (!AGENTS.some(a => a.id === s.agentId)) throw new Error(`Workflow "${w.id}" uses unknown agent "${s.agentId}"`);
+  }
+}
+const PUBLIC_WORKFLOWS = WORKFLOWS.map(w => ({
+  id: w.id, command: w.command, name: w.name, description: w.description, icon: w.icon, promptStarter: w.promptStarter,
+  steps: w.steps.map(s => {
+    const a = AGENTS.find(x => x.id === s.agentId);
+    return { id: s.id, agentId: a.id, agentName: a.name, agentIcon: a.icon, agentGradient: a.gradient, role: s.role, label: s.label };
+  })
+}));
+app.get('/api/workflows', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  res.json(PUBLIC_WORKFLOWS);
+});
+
+const MAX_SYSTEM_PROMPT_CHARS = 4000;
+const MAX_STEP_CONTEXT_CHARS = 6000; // how much of each earlier step a later step gets to see
+
+// A user-defined agent sent along with a chat request. Returns an agent object, or null if anything
+// is malformed or out of range (the client validates too, but the server never trusts it).
+function parseCustomAgent(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  const systemPrompt = typeof raw.systemPrompt === 'string' ? raw.systemPrompt.trim() : '';
+  if (!name || name.length > 60 || !systemPrompt || systemPrompt.length > MAX_SYSTEM_PROMPT_CHARS) return null;
+  let temperature;
+  if (raw.temperature !== undefined) {
+    if (typeof raw.temperature !== 'number' || !Number.isFinite(raw.temperature) || raw.temperature < 0 || raw.temperature > 2) return null;
+    temperature = raw.temperature;
+  }
+  return {
+    id: 'custom', name, category: 'Custom', systemPrompt, temperature,
+    description: typeof raw.description === 'string' ? raw.description.slice(0, 200) : '',
+    tools: Array.isArray(raw.tools) ? raw.tools.filter(t => TOOL_NAMES.has(t)) : [],
+    greeting: `I'm ${name}. How can I help?`
+  };
+}
+
+// What each step is given: the user's task plus the (trimmed) output of every step before it.
+function buildStepPrompt(task, outputs) {
+  return `Task from the user:\n${task}` + outputs.map(o =>
+    `\n\n--- Output from the ${o.role} (${o.agentName}) ---\n${o.text.trim().slice(0, MAX_STEP_CONTEXT_CHARS)}`
+  ).join('');
+}
+
+function demoStepText(workflow, step, agent, task, isFinal) {
+  const topic = task.replace(/\s+/g, ' ').trim().slice(0, 80);
+  if (isFinal) {
+    return `## ${workflow.name} (demo preview)\n\nThis is a canned preview of the final ${step.role} output for “${topic}”. In live mode the ${agent.name} polishes the earlier steps into the real result.\n\n- The steps above show how work is handed from agent to agent\n- Set \`GEMINI_API_KEY\` or \`OPENAI_API_KEY\` on the server to get real answers`;
+  }
+  return `Demo output: in live mode the ${step.role} (${agent.name}) would ${step.label.charAt(0).toLowerCase()}${step.label.slice(1)} for “${topic}”.\n\n- Placeholder point one\n- Placeholder point two\n- Placeholder point three`;
+}
+
+// Runs a workflow as real, sequential model calls and yields progress events:
+//   plan        the full list of steps, all pending
+//   step        a step became active / complete / error
+//   step_delta  text produced by an intermediate step (shown in the client's thought stream)
+//   stream      text of the FINAL step, which is the answer
+// A failing step stops the run with an honest error; it is never replaced by canned text.
+async function* runWorkflow(workflow, task, signal) {
+  const steps = workflow.steps.map(s => ({ ...s, agent: AGENTS.find(a => a.id === s.agentId) }));
+  yield { type: 'plan', workflowId: workflow.id, steps: steps.map(s => ({ id: s.id, agentName: s.agent.name, agentIcon: s.agent.icon, role: s.role, label: s.label, status: 'pending' })) };
+
+  const outputs = [];
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    const isFinal = i === steps.length - 1;
+    yield { type: 'step', id: s.id, status: 'active' };
+
+    const stepAgent = {
+      ...s.agent, tools: [], temperature: undefined,
+      systemPrompt: `${s.agent.systemPrompt}\n\nYou are working as the ${s.role} in a multi-agent workflow ("${workflow.name}"). ${s.instruction}`
+    };
+    let text = '';
+    try {
+      const source = PROVIDER === 'demo'
+        ? streamDemoText(demoStepText(workflow, s, s.agent, task, isFinal), signal)
+        : callLLM(stepAgent, [{ role: 'user', content: buildStepPrompt(task, outputs) }], signal, { strict: true });
+      for await (const chunk of source) {
+        if (signal?.aborted) return;
+        text += chunk;
+        yield isFinal ? { type: 'stream', content: chunk } : { type: 'step_delta', id: s.id, content: chunk };
+      }
+      if (!text.trim()) throw new Error('empty step output');
+    } catch (err) {
+      if (signal?.aborted) return;
+      console.error(`workflow ${workflow.id} step ${s.id} failed:`, err.message);
+      yield { type: 'step', id: s.id, status: 'error', error: 'This step failed.' };
+      yield { type: 'error', content: `The ${s.role} step failed, so the workflow stopped. Please try again.` };
+      return;
+    }
+    outputs.push({ role: s.role, agentName: s.agent.name, text });
+    yield { type: 'step', id: s.id, status: 'complete' };
+  }
+}
 
 // Chat is stateless: the browser keeps the conversation and sends the recent turns with
 // each request, so any server instance (e.g. Vercel serverless) can answer any request.
@@ -501,8 +620,8 @@ function parseHistory(raw) {
 
 app.post('/api/chat', rateLimit, async (req, res) => {
   const body = req.body || {};
-  const { agentId, message } = body;
-  if (typeof agentId !== 'string' || typeof message !== 'string' || !message.trim()) {
+  const { agentId, message, workflowId } = body;
+  if (typeof message !== 'string' || !message.trim()) {
     return res.status(400).json({ error: 'Missing or invalid fields' });
   }
   if (message.length > MAX_MESSAGE_CHARS) {
@@ -510,8 +629,23 @@ app.post('/api/chat', rateLimit, async (req, res) => {
   }
   const history = parseHistory(body.history);
   if (!history) return res.status(400).json({ error: 'Invalid history' });
-  const agent = AGENTS.find(a => a.id === agentId);
-  if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+  // Three ways to choose who answers: a multi-agent workflow, a user-defined agent, or a built-in agent.
+  let workflow = null;
+  let agent = null;
+  if (workflowId !== undefined) {
+    workflow = WORKFLOWS.find(w => w.id === workflowId);
+    if (!workflow) return res.status(404).json({ error: 'Workflow not found' });
+    // A workflow is several model calls, so charge the rate limiter for the extra ones too.
+    if (!chargeRate(req.ip, workflow.steps.length - 1)) return tooManyRequests(res);
+  } else if (body.agent !== undefined) {
+    agent = parseCustomAgent(body.agent);
+    if (!agent) return res.status(400).json({ error: 'Invalid agent' });
+  } else {
+    if (typeof agentId !== 'string') return res.status(400).json({ error: 'Missing or invalid fields' });
+    agent = AGENTS.find(a => a.id === agentId);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+  }
 
   const messages = [...history, { role: 'user', content: message }];
 
@@ -529,9 +663,16 @@ app.post('/api/chat', rateLimit, async (req, res) => {
 
   let aiContent = '';
   try {
-    for await (const chunk of callLLM(agent, messages, abort.signal)) {
-      aiContent += chunk;
-      send({ type: 'stream', content: chunk });
+    if (workflow) {
+      for await (const evt of runWorkflow(workflow, message, abort.signal)) {
+        if (evt.type === 'stream') aiContent += evt.content;
+        send(evt);
+      }
+    } else {
+      for await (const chunk of callLLM(agent, messages, abort.signal)) {
+        aiContent += chunk;
+        send({ type: 'stream', content: chunk });
+      }
     }
   } catch (err) {
     console.error('Chat error:', err.message);

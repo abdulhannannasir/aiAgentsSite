@@ -1,17 +1,18 @@
-# Render Blueprint — deploys the app as a free web service.
+# Render Blueprint — deploys the app as a web service.
 # Render dashboard -> New -> Blueprint -> pick your GitHub repo.
 services:
   - type: web
     name: agentverse-website
     runtime: node
     plan: free
-    buildCommand: npm install
+    # Render sets NODE_ENV=production while building, which would skip the build tools, so include dev dependencies.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm start
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
-      # Optional. Leave unset for demo mode; add it in the Render dashboard for real AI replies.
+      # Optional. Leave unset for demo mode; add one in the Render dashboard for real AI replies.
+      - key: GEMINI_API_KEY
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
-      - key: OPENAI_MODEL
-        value: gpt-4o-mini
