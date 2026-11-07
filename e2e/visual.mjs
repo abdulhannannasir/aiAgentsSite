@@ -116,6 +116,21 @@ check('magnetic button leans toward a nearby cursor', pulled - rest > 2, `${rest
 await page.mouse.move(1300, 800, { steps: 8 }); await sleep(1100);
 check('and eases back to rest when the cursor leaves', Math.abs((await tx()) - rest) < 1.5, await tx());
 
+// ---- cursor trail: ordinary movement leaves a tail, but one huge jump must not stretch it into a streak
+const trailLit = box => page.evaluate(({ x, y, w, h }) => {
+  const d = document.querySelector('[data-testid=fx-cursor] canvas').getContext('2d').getImageData(x, y, w, h).data;
+  let n = 0; for (let i = 3; i < d.length; i += 4) if (d[i] > 8) n++; return n;
+}, box);
+const trailMax = async (box, times) => { let m = 0, prev = 0; for (const t of times) { await sleep(t - prev); prev = t; m = Math.max(m, await trailLit(box)); } return m; };
+await page.mouse.move(150, 150); await page.mouse.move(180, 170, { steps: 5 }); await sleep(700);
+await page.mouse.move(1150, 650); // a single event ~1,100 px away
+const streak = await trailMax({ x: 560, y: 320, w: 120, h: 120 }, [25, 60, 110, 170]); // box around the jump's midpoint
+check('cursor trail: a 1,100px instant jump draws no streak across the screen', streak === 0, `${streak} lit px at the midpoint`);
+await page.mouse.move(300, 790); await sleep(700);
+await page.mouse.move(520, 790, { steps: 22 }); // ~10 px per event, over empty background
+const tail = await trailMax({ x: 380, y: 770, w: 150, h: 40 }, [0, 16, 40]);
+check('cursor trail: ordinary movement still leaves a visible tail', tail > 150, `${tail} lit px behind the pointer`);
+
 // ---- agent deck: 3D tilt, spotlight border, status glow
 await scrollTo(page, await sectionTop(page, 'agents') - 70, 1500);
 const deck = page.locator('[data-agent-card]');

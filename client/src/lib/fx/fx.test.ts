@@ -3,6 +3,7 @@ import { buildNetwork, mulberry32, nodesForQuality } from './network';
 import { decideTier, type FxEnv } from './capability';
 import { activityLevel, FULL_ACTIVITY_CPS, smoothLevel } from './activity';
 import { parseView } from '../route';
+import { isTrailJump, segmentFade, TRAIL_FADE_START_PX, TRAIL_JUMP_PX, TRAIL_MAX_SEGMENT_PX } from './trail';
 
 const desktop: FxEnv = { reducedMotion: false, coarsePointer: false, webgl: true, saveData: false, cores: 8, memoryGb: 8, width: 1440 };
 
@@ -136,5 +137,43 @@ describe('parseView', () => {
     expect(parseView('#/')).toBe('landing');
     expect(parseView('#/application')).toBe('landing');
     expect(parseView('#story')).toBe('landing');
+  });
+});
+
+describe('cursor trail rules', () => {
+  it('treats only an impossibly long single move as a jump', () => {
+    expect(isTrailJump(0, 0)).toBe(false);
+    expect(isTrailJump(60, 0)).toBe(false); // a fast flick in one 60 Hz frame is ~70 px
+    expect(isTrailJump(200, 150)).toBe(false); // 250 px, still a (very fast) gesture
+    expect(isTrailJump(TRAIL_JUMP_PX, 0)).toBe(false); // the threshold itself is not past it
+    expect(isTrailJump(TRAIL_JUMP_PX + 1, 0)).toBe(true);
+    expect(isTrailJump(900, 600)).toBe(true); // a 1,000 px teleport
+    expect(isTrailJump(-1100, 0)).toBe(true); // direction does not matter
+  });
+
+  it('draws short segments at full strength and drops over-stretched ones', () => {
+    expect(segmentFade(0)).toBe(1);
+    expect(segmentFade(40)).toBe(1);
+    expect(segmentFade(TRAIL_FADE_START_PX)).toBe(1);
+    expect(segmentFade(TRAIL_MAX_SEGMENT_PX)).toBe(0);
+    expect(segmentFade(1100)).toBe(0);
+  });
+
+  it('fades smoothly and monotonically between the two limits', () => {
+    const mid = (TRAIL_FADE_START_PX + TRAIL_MAX_SEGMENT_PX) / 2;
+    expect(segmentFade(mid)).toBeCloseTo(0.5);
+    let prev = 1;
+    for (let len = TRAIL_FADE_START_PX; len <= TRAIL_MAX_SEGMENT_PX; len += 5) {
+      const f = segmentFade(len);
+      expect(f).toBeLessThanOrEqual(prev + 1e-12);
+      expect(f).toBeGreaterThanOrEqual(0);
+      prev = f;
+    }
+  });
+
+  it('never returns a bad opacity for bad input', () => {
+    expect(segmentFade(Number.NaN)).toBe(0);
+    expect(segmentFade(Infinity)).toBe(0);
+    expect(segmentFade(-5)).toBe(1);
   });
 });
