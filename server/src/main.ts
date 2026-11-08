@@ -24,8 +24,7 @@ export function start(): void {
   });
   const shutdown = (signal: string) => {
     log.info({ signal }, 'shutting down');
-    ctx.close();
-    server.close(() => process.exit(0));
+    server.close(() => { void ctx.close().finally(() => process.exit(0)); });
     // Open SSE streams keep the server alive; don't wait for them forever.
     setTimeout(() => process.exit(0), 10_000).unref();
   };

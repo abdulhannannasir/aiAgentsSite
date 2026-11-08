@@ -56,8 +56,14 @@ const EnvSchema = z.object({
 
   // Later phases. Only their presence is reported (GET /api/v1/meta); values are never exposed.
   DATABASE_URL: optionalString,
-  BETTER_AUTH_SECRET: optionalString,
-  SMTP_URL: optionalString,
+  // 32+ random characters. Signs session cookies and tokens.
+  BETTER_AUTH_SECRET: z.preprocess(blankToUndefined, z.string().min(32, 'must be at least 32 characters (e.g. `openssl rand -base64 32`)').optional()),
+  // The public URL of the app (used in email links and as a trusted origin). Default: http://localhost:<PORT>
+  BETTER_AUTH_URL: z.preprocess(blankToUndefined, z.string().url().optional()),
+  // true/false. Default: required when email delivery (SMTP_URL) is configured, otherwise not.
+  REQUIRE_EMAIL_VERIFICATION: z.preprocess(blankToUndefined, z.enum(['true', 'false']).optional()),
+  SMTP_URL: z.preprocess(blankToUndefined, z.string().regex(/^smtps?:\/\//, 'must start with smtp:// or smtps://').optional()),
+  MAIL_FROM: z.preprocess(blankToUndefined, z.string().default('AgentVerse <no-reply@localhost>')),
   REDIS_URL: optionalString,
   S3_BUCKET: optionalString
 });
@@ -94,6 +100,12 @@ export interface AppConfig {
   };
   features: { database: boolean; auth: boolean; email: boolean; redis: boolean; storage: boolean };
   databaseUrl: string | null;
+  auth: {
+    secret: string | null;
+    baseUrl: string;
+    requireEmailVerification: boolean;
+  };
+  mail: { smtpUrl: string | null; from: string };
 }
 
 export class ConfigError extends Error {
@@ -158,6 +170,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       redis: !!e.REDIS_URL,
       storage: !!e.S3_BUCKET
     },
-    databaseUrl: e.DATABASE_URL ?? null
+    databaseUrl: e.DATABASE_URL ?? null,
+    auth: {
+      secret: e.BETTER_AUTH_SECRET ?? null,
+      baseUrl: stripSlash(e.BETTER_AUTH_URL ?? `http://localhost:${e.PORT}`),
+      requireEmailVerification: e.REQUIRE_EMAIL_VERIFICATION ? e.REQUIRE_EMAIL_VERIFICATION === 'true' : !!e.SMTP_URL
+    },
+    mail: { smtpUrl: e.SMTP_URL ?? null, from: e.MAIL_FROM }
   };
 }

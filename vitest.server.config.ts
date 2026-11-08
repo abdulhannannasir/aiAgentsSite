@@ -6,6 +6,8 @@ export default defineConfig({
     root: '.',
     include: ['server/test/**/*.test.ts'],
     environment: 'node',
+    // The database tests share one test database, so files run one at a time.
+    fileParallelism: false,
     testTimeout: 20000,
     hookTimeout: 30000
   }

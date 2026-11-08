@@ -6,7 +6,8 @@ services:
     runtime: node
     plan: free
     # Render sets NODE_ENV=production while building, which would skip the build tools, so include dev dependencies.
-    buildCommand: npm ci --include=dev && npm run build
+    # `npm run release` applies database migrations when DATABASE_URL is set (skipped otherwise).
+    buildCommand: npm ci --include=dev && npm run build && npm run release
     startCommand: npm start
     healthCheckPath: /healthz
     autoDeploy: true
@@ -15,4 +16,11 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: OPENAI_API_KEY
+        sync: false
+      # Optional (accounts and saved data): a PostgreSQL URL and a 32+ character secret.
+      - key: DATABASE_URL
+        sync: false
+      - key: BETTER_AUTH_SECRET
+        sync: false
+      - key: BETTER_AUTH_URL
         sync: false

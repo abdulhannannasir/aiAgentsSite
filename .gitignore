@@ -6,3 +6,4 @@ npm-debug.log*
 # Built front end (vite build writes here; Vercel/Render/Docker build it)
 /public/
 /server/dist/
+/server/src/generated/

@@ -6,6 +6,13 @@ import type { AppConfig } from './config/env.js';
 import { createLogger, type Logger } from './lib/logger.js';
 import { apiNotFound, corsPolicy, errorHandler, requestContext, securityHeaders } from './middleware/http.js';
 import { RateLimiter } from './middleware/rateLimit.js';
+import { attachAuth, originGuard } from './middleware/session.js';
+import { toNodeHandler } from 'better-auth/node';
+import { unavailable } from './lib/errors.js';
+import { customAgentsRouter } from './modules/agents/customAgents.js';
+import { conversationsRouter } from './modules/chat/conversations.js';
+import { accountRouter } from './modules/workspaces/routes.js';
+import { createPlatform, type Platform } from './platform.js';
 import { createLLMService, type LLMService } from './modules/providers/llm.js';
 import { validateWorkflows } from './modules/workflows/engine.js';
 import { v1Router } from './routes/v1.js';
@@ -25,8 +32,9 @@ export interface AppContext {
   cfg: AppConfig;
   log: Logger;
   llm: LLMService;
-  /** Stops timers (rate limiter sweep) so tests and graceful shutdown leave nothing running. */
-  close: () => void;
+  platform: Platform;
+  /** Stops timers and closes the database pool so tests and graceful shutdown leave nothing running. */
+  close: () => Promise<void>;
 }
 
 export interface AppOptions {
@@ -43,6 +51,7 @@ export function createApp(cfg: AppConfig, opts: AppOptions = {}): AppContext {
   const log = opts.logger ?? createLogger(cfg.logLevel);
   const llm = createLLMService(cfg, log, { demoDelay: opts.demoDelay });
   const limiter = new RateLimiter(cfg.limits.rateLimit.windowMs, cfg.limits.rateLimit.max);
+  const platform = createPlatform(cfg, log);
 
   const app = express();
   app.set('trust proxy', cfg.trustProxy); // Render / Railway / Fly / Vercel sit behind one proxy
@@ -50,6 +59,10 @@ export function createApp(cfg: AppConfig, opts: AppOptions = {}): AppContext {
   app.use(requestContext(log));
   app.use(securityHeaders(cfg));
   app.use('/api', corsPolicy(cfg));
+  // Better Auth parses its own request bodies, so it is mounted before express.json().
+  app.all('/api/auth/*', platform.auth
+    ? toNodeHandler(platform.auth)
+    : (_req, _res, next) => next(unavailable('Accounts are not enabled on this server (DATABASE_URL and BETTER_AUTH_SECRET are required).')));
   // History (up to 20 x 8000 chars, some multi-byte) rides along with each chat request.
   app.use(express.json({ limit: '1mb' }));
 
@@ -58,11 +71,15 @@ export function createApp(cfg: AppConfig, opts: AppOptions = {}): AppContext {
 
   app.get('/healthz', (_req, res) => res.type('text').send('ok'));
 
-  const api = v1Router({ cfg, log, llm, limiter, version: readVersion() });
+  app.use('/api', originGuard([cfg.auth.baseUrl, ...cfg.corsOrigins]), attachAuth(platform, log));
+  const api = v1Router({ cfg, log, llm, limiter, version: readVersion(), platform });
+  app.use('/api/v1', accountRouter(platform, log));
+  app.use('/api/v1/custom-agents', customAgentsRouter(platform, log));
+  app.use('/api/v1/conversations', conversationsRouter(platform, log));
   app.use('/api/v1', api);
   app.use('/api', api); // unversioned aliases, kept for existing clients
   app.use('/api', apiNotFound);
   app.use(errorHandler(log));
 
-  return { app, cfg, log, llm, close: () => limiter.close() };
+  return { app, cfg, log, llm, platform, close: async () => { limiter.close(); await platform.close(); } };
 }

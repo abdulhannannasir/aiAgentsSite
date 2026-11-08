@@ -20,7 +20,7 @@ export async function startApp(env: Record<string, string> = {}): Promise<TestSe
   return {
     url: `http://127.0.0.1:${port}`,
     ctx,
-    close: () => new Promise(r => { ctx.close(); server.closeAllConnections(); server.close(() => r()); })
+    close: () => new Promise(r => { server.closeAllConnections(); server.close(() => { void ctx.close().then(() => r()); }); })
   };
 }
 

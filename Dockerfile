@@ -11,10 +11,12 @@ FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 COPY server.js ./
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/public ./public
+# Migrations ship with the image; run `npx prisma migrate deploy` (or `npm run release` in the build image) before starting.
+COPY prisma ./prisma
 
 USER node
 EXPOSE 3000

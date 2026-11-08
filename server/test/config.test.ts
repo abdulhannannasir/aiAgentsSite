@@ -52,7 +52,7 @@ describe('loadConfig', () => {
   });
 
   it('reports configured features without exposing values', () => {
-    const cfg = loadConfig({ DATABASE_URL: 'postgres://x', BETTER_AUTH_SECRET: 's', REDIS_URL: 'redis://x' });
+    const cfg = loadConfig({ DATABASE_URL: 'postgres://x', BETTER_AUTH_SECRET: 's'.repeat(32), REDIS_URL: 'redis://x' });
     expect(cfg.features).toMatchObject({ database: true, auth: true, redis: true, email: false, storage: false });
   });
 });
