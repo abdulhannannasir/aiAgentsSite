@@ -5,7 +5,7 @@ Single source of truth for where the 12-phase build stands. Updated at the end o
 | Phase | Title | Status |
 | --- | --- | --- |
 | 0 | Audit and architecture foundation | ✅ Done |
-| 1 | UI architecture and design system | ⚪ Not started |
+| 1 | UI architecture and design system | ✅ Done |
 | 2 | Auth, database, user management | ⚪ Not started |
 | 3 | Agent marketplace | ⚪ Not started (42 agents + builder exist from before) |
 | 4 | Real AI execution engine | ⚪ Not started (OpenAI/Gemini streaming exist from before) |
@@ -63,3 +63,42 @@ e2e visual 76/76 ✅ (with the CSP active) · smoke 9/9 ✅.
 * Live-mode chat still falls back to the labelled demo reply when the provider fails before the first token
   (behaviour preserved on purpose; Phase 4 turns it into an explicit error).
 * Dev-tool `npm audit` advisories (vite/esbuild dev server, vitest) remain; upgrade planned separately.
+
+### Phase 1 — UI architecture and design system (2026-11-08)
+
+**Implemented**
+* App shell: sticky top bar (logo → landing, command search, AI-mode badge → Settings, New agent, notifications,
+  shortcuts, docs, theme, account menu), collapsible desktop sidebar (state persisted), phone/tablet navigation drawer.
+* Router: `#/app/<page>` for 13 pages; `#/app` stays the chat workspace so existing links and tests keep working;
+  unknown pages get a 404 page; each page sets the tab title.
+* Pages that work today: **Command Center** (agents, running now, workflows, AI mode, live agents with elapsed time,
+  this-session stats, recent activity, platform-service status — all computed from real state or `/api/v1/meta`),
+  **Chat** (the existing workspace), **Discover Agents** (search, category filter, sort, details drawer with tools and
+  the workflows that use the agent), **My Agents** (chat, edit, duplicate, export, delete with confirmation),
+  **Agent Builder** (templates, blank, import), **Workflows** (pipelines, run), **Settings** (theme, effects, provider
+  and service status, delete local agents).
+* Planned modules (Projects, Memory, Integrations, Activity, Analytics, Billing) are listed with a "Soon" label and open
+  an honest page: what the module will do, which phase builds it, and whether this server already has the services it
+  needs. Workspace selector, notifications and sign-in are shown truthfully (guest label, empty inbox, disabled
+  sign-in with the reason) instead of fake controls.
+* Design system in `client/src/components/ui`: Button / LinkButton / IconButton, Card, Badge, StatusDot, Stat,
+  PageHeader, EmptyState, ErrorState, Spinner, Skeleton, ProgressBar, Field / Input / Select / Textarea / Segmented,
+  Tabs, Table, Menu (keyboard: arrows, Home/End, Esc, focus return), Popover, Drawer (focus trap), Tooltip.
+  Tokens remain the existing CSS variables, so light/dark and the neon identity are unchanged.
+* New pages are lazy chunks (2–9 KB each); the landing page and 3D effects are untouched.
+
+**Files** — new: `client/src/app/{Shell,nav,workspace}.tsx`, `client/src/pages/*`, `client/src/components/ui/*`,
+`client/src/lib/sessionStats.ts`, `client/src/lib/shell.test.ts`, `e2e/shell.mjs`. Modified: `client/src/App.tsx`
+(workspace context + page routing), `client/src/lib/route.ts`, `README.md`. Removed: `client/src/components/Navbar.tsx`
+(replaced by the shell's top bar with the same controls and labels).
+
+**Database / API changes** — none.
+
+**Tests** — typecheck ✅ · client unit 67/67 ✅ (8 new: routing, nav model, session stats) · server 58/58 ✅ ·
+build ✅ · e2e features 79/79 ✅ · e2e visual 76/76 ✅ · e2e shell 69/69 ✅ (new: every route, sidebar/drawer/palette/
+keyboard navigation, collapse persistence, page actions, phone overflow on all 13 routes, no console/CSP errors).
+
+**Known issues**
+* Command Center figures are per browser tab until execution records exist (Phase 2 persistence, Phase 9 metrics);
+  the page says so.
+* The 3D swarm still renders behind data pages on the `high` tier (capped at 30 fps); revisit in Phase 11 performance.

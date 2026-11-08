@@ -1,27 +1,40 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, ClipboardCopy, FileDown, Home, Keyboard, MessageSquarePlus, Moon, Plus, Rocket, Sparkles, Sun, Upload } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, ClipboardCopy, FileDown, Home, Keyboard, MessageSquarePlus, Moon, Plus, Sparkles, Sun, Upload } from 'lucide-react';
+import type { MetaResponse } from '../../server/src/contracts';
 import { AgentCreator } from './components/AgentCreator';
 import { AgentExportModal } from './components/AgentExportModal';
 import { AgentAvatar, CUSTOM_GRADIENT, workflowIcon } from './components/AgentAvatar';
-import { AgentSidebar } from './components/AgentSidebar';
-import { ChatWindow } from './components/ChatWindow';
 import { CommandPalette } from './components/CommandPalette';
 import { DocsModal } from './components/DocsModal';
-import { Navbar } from './components/Navbar';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { useToast } from './components/Toast';
+import { Spinner } from './components/ui/Display';
 import { useChat } from './hooks/useChat';
-import { fetchAgents, fetchHealth, fetchWorkflows } from './lib/api';
+import { fetchAgents, fetchHealth, fetchMeta, fetchWorkflows } from './lib/api';
 import { EMPTY_DRAFT, MAX_AGENT_FILE_BYTES, isStoredAgent, parseAgentFile } from './lib/agentFile';
 import { chatFileName, chatToMarkdown, copyToClipboard, downloadTextFile } from './lib/chatExport';
 import { MOD, isEditableTarget } from './lib/platform';
 import { readStored, writeStored } from './lib/storage';
 import { useFx, type FxPref } from './lib/fx/capability';
-import { useView } from './lib/route';
+import { useRoute, useView } from './lib/route';
 import { CustomCursor } from './components/fx/CustomCursor';
 import { FxBackground } from './components/fx/FxBackground';
 import { LandingPage } from './components/landing/LandingPage';
+import { AppShell } from './app/Shell';
+import { NAV, navItem } from './app/nav';
+import { WorkspaceContext, type WorkspaceApi } from './app/workspace';
+import { ChatPage } from './pages/ChatPage';
 import type { ActiveAgent, Agent, AgentDraft, Command, CustomAgent, Theme, Workflow } from './types';
+
+// Pages other than chat load on demand, so the workspace doesn't pay for code it isn't showing.
+const CommandCenterPage = lazy(() => import('./pages/CommandCenterPage'));
+const DiscoverPage = lazy(() => import('./pages/DiscoverPage'));
+const MyAgentsPage = lazy(() => import('./pages/MyAgentsPage'));
+const BuilderPage = lazy(() => import('./pages/BuilderPage'));
+const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const PlannedPage = lazy(() => import('./pages/PlannedPage'));
+const NotFoundPage = lazy(() => import('./pages/PlannedPage').then(m => ({ default: m.NotFoundPage })));
 
 const THEME_KEY = 'agentverse.theme';
 const AGENTS_KEY = 'agentverse.customAgents';
@@ -39,23 +52,32 @@ export default function App() {
   const { toast } = useToast();
   const chat = useChat();
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const [view, go] = useView();
+  const [route, navigate] = useRoute();
+  const [, go] = useView();
+  const view = route.view;
+  const page = route.page;
   const fx = useFx();
 
   // ---- data from the server
   const [agents, setAgents] = useState<Agent[]>([]);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [mode, setMode] = useState<'live' | 'demo' | null>(null);
+  const [meta, setMeta] = useState<MetaResponse | null>(null);
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const load = useCallback(async () => {
     setLoadError(false);
+    setLoading(true);
     try {
-      const [a, w, h] = await Promise.all([fetchAgents(), fetchWorkflows().catch(() => [] as Workflow[]), fetchHealth().catch(() => null)]);
+      const [a, w, h, m] = await Promise.all([fetchAgents(), fetchWorkflows().catch(() => [] as Workflow[]), fetchHealth().catch(() => null), fetchMeta().catch(() => null)]);
       setAgents(a);
       setWorkflows(w);
       setMode(h?.mode ?? null);
+      setMeta(m);
     } catch {
       setLoadError(true);
+    } finally {
+      setLoading(false);
     }
   }, []);
   useEffect(() => { void load(); }, [load]);
@@ -96,6 +118,7 @@ export default function App() {
 
   const messages = (selectedKey && chat.threads[selectedKey]) || [];
   const streaming = !!selectedKey && chat.streamingKeys.includes(selectedKey);
+  const onChatPage = view === 'app' && page === 'chat' && !route.unknown;
 
   const focusComposer = useCallback((force = false) => {
     if (!force && !isDesktop()) return; // don't pop the on-screen keyboard open on phones
@@ -105,7 +128,7 @@ export default function App() {
   const selectAgent = useCallback((key: string) => {
     setSelectedKey(key);
     setComposer(EMPTY_COMPOSER);
-    go('app'); // from the landing page or the palette: open the workspace on this agent
+    go('app'); // from the landing page, the palette or any app page: open the chat on this agent
     focusComposer();
   }, [focusComposer, go]);
 
@@ -172,20 +195,40 @@ export default function App() {
     closeCreator();
   };
 
-  const deleteAgent = () => {
-    const id = creator.editingId;
-    if (!id) return;
+  const removeCustomAgent = useCallback((id: string) => {
     const key = `custom:${id}`;
     chat.clear(key);
     setCustomAgents(list => list.filter(a => a.id !== id));
     setSelectedKey(k => (k === key ? null : k));
-    closeCreator();
     toast('Agent deleted');
+  }, [chat, toast]);
+
+  const deleteAgent = () => {
+    if (!creator.editingId) return;
+    removeCustomAgent(creator.editingId);
+    closeCreator();
   };
+
+  const duplicateCustomAgent = useCallback((id: string) => {
+    const a = customAgents.find(x => x.id === id);
+    if (!a) return;
+    if (customAgents.length >= MAX_CUSTOM_AGENTS) { toast(`You can keep up to ${MAX_CUSTOM_AGENTS} custom agents. Delete one first.`, 'error'); return; }
+    const now = Date.now();
+    const name = `${a.name.slice(0, 53)} (copy)`;
+    setCustomAgents(list => [...list, { ...draftOf(a), name, id: uid(), createdAt: now, updatedAt: now }]);
+    toast(`Created ${name}`, 'success');
+  }, [customAgents, toast]);
+
+  const removeAllCustomAgents = useCallback(() => {
+    for (const a of customAgents) chat.clear(`custom:${a.id}`);
+    setSelectedKey(k => (k?.startsWith('custom:') ? null : k));
+    setCustomAgents([]);
+    toast('All custom agents deleted');
+  }, [customAgents, chat, toast]);
 
   const importInput = useRef<HTMLInputElement>(null);
   const importTarget = useRef<string | null>(null);
-  const triggerImport = (targetId: string | null = null) => { importTarget.current = targetId; importInput.current?.click(); };
+  const triggerImport = useCallback((targetId: string | null = null) => { importTarget.current = targetId; importInput.current?.click(); }, []);
   const onImportFile = async (file: File | undefined) => {
     if (!file) return;
     if (file.size > MAX_AGENT_FILE_BYTES) { toast(`That file is too large (max ${Math.round(MAX_AGENT_FILE_BYTES / 1000)} KB).`, 'error'); return; }
@@ -196,13 +239,36 @@ export default function App() {
     openCreator(importTarget.current, result.draft, [`Loaded "${result.draft.name}" from ${file.name}. Review it, then save.`, ...result.warnings]);
   };
 
+  // ---- shared workspace API for the pages and the shell
+  const ws = useMemo<WorkspaceApi>(() => ({
+    agents, workflows, mode, meta, loading, loadError, reload: () => void load(),
+    customAgents, maxCustomAgents: MAX_CUSTOM_AGENTS, duplicateCustomAgent, removeCustomAgent, removeAllCustomAgents,
+    chat, selectAgent, startWorkflow, openCreator,
+    editCustomAgent: id => { const a = customAgents.find(x => x.id === id); if (a) openCreator(id, draftOf(a)); },
+    exportCustomAgent: id => { const a = customAgents.find(x => x.id === id); if (a) setExportDraft(draftOf(a)); },
+    triggerImport,
+    theme, setTheme, fxPref: fx.pref, setFxPref: (p: FxPref) => fx.setPref(p),
+    navigate,
+    openPalette: () => setPaletteOpen(true), openShortcuts: () => setShortcutsOpen(true), openDocs: () => setDocsOpen(true)
+  }), [agents, workflows, mode, meta, loading, loadError, load, customAgents, duplicateCustomAgent, removeCustomAgent, removeAllCustomAgents,
+    chat, selectAgent, startWorkflow, openCreator, triggerImport, theme, fx, navigate]);
+
   // ---- command palette
   const commands = useMemo<Command[]>(() => {
     const list: Command[] = [];
-    list.push(view === 'app'
-      ? { id: 'go-home', group: 'Navigate', label: 'Go to the home page', keywords: 'landing overview intro', icon: <Home size={15} />, run: () => go('landing') }
-      : { id: 'go-app', group: 'Navigate', label: 'Open the workspace', keywords: 'launch chat agents app', icon: <Rocket size={15} />, run: () => go('app') });
-    if (view === 'app' && activeAgent) {
+    if (view === 'app') {
+      list.push({ id: 'go-home', group: 'Navigate', label: 'Go to the home page', keywords: 'landing overview intro', icon: <Home size={15} />, run: () => go('landing') });
+    }
+    for (const n of NAV) {
+      if (view === 'app' && n.id === page && !route.unknown) continue;
+      const Icon = n.icon;
+      list.push({
+        id: `go-${n.id}`, group: 'Navigate', label: n.id === 'chat' && view !== 'app' ? 'Open the workspace' : `Go to ${n.label}`,
+        hint: n.status === 'planned' ? `Planned · Phase ${n.phase}` : n.description,
+        keywords: `${n.section} ${n.description} page open launch app`, icon: <Icon size={15} />, run: () => navigate(n.id)
+      });
+    }
+    if (onChatPage && activeAgent) {
       list.push({ id: 'new-chat', group: 'Chat', label: 'New chat', hint: `Clear the conversation with ${activeAgent.name}`, shortcut: `${MOD}N`, keywords: 'clear reset', icon: <MessageSquarePlus size={15} />, run: newChat });
       if (messages.length) {
         list.push({ id: 'chat-copy', group: 'Chat', label: 'Copy chat as Markdown', keywords: 'export clipboard', icon: <ClipboardCopy size={15} />, run: () => void copyChat() });
@@ -229,23 +295,23 @@ export default function App() {
     list.push({ id: 'docs', group: 'Help', label: 'Open documentation', keywords: 'help guide how to docs', icon: <BookOpen size={15} />, run: () => setDocsOpen(true) });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, go, fx.pref, activeAgent, messages.length, workflows, customAgents, agents, theme, newChat, copyChat, downloadChat, startWorkflow, selectAgent, openCreator]);
+  }, [view, page, route.unknown, onChatPage, go, navigate, fx.pref, activeAgent, messages.length, workflows, customAgents, agents, theme, newChat, copyChat, downloadChat, startWorkflow, selectAgent, openCreator, triggerImport]);
 
   // ---- global keyboard shortcuts
   const anyModalOpen = paletteOpen || shortcutsOpen || docsOpen || creator.open || !!exportDraft;
-  const live = useRef({ anyModalOpen, newChat, hasAgent: !!activeAgent, inApp: view === 'app' });
-  live.current = { anyModalOpen, newChat, hasAgent: !!activeAgent, inApp: view === 'app' };
+  const live = useRef({ anyModalOpen, newChat, hasAgent: !!activeAgent, inChat: onChatPage });
+  live.current = { anyModalOpen, newChat, hasAgent: !!activeAgent, inChat: onChatPage };
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      const { anyModalOpen: modal, newChat: startNew, hasAgent, inApp } = live.current;
+      const { anyModalOpen: modal, newChat: startNew, hasAgent, inChat } = live.current;
       const mod = e.metaKey || e.ctrlKey;
       if (mod && !e.altKey && e.key.toLowerCase() === 'k') { e.preventDefault(); setPaletteOpen(o => !o); return; }
       if (modal) return;
       // Cmd/Ctrl+N is often reserved by the browser; Alt+N is the dependable alternative.
-      if (inApp && e.code === 'KeyN' && ((mod && !e.shiftKey) || (e.altKey && !mod))) { e.preventDefault(); startNew(); return; }
+      if (inChat && e.code === 'KeyN' && ((mod && !e.shiftKey) || (e.altKey && !mod))) { e.preventDefault(); startNew(); return; }
       if (isEditableTarget(e.target) || mod || e.altKey) return;
       if (e.key === '?') { e.preventDefault(); setShortcutsOpen(true); return; }
-      if (inApp && e.key === '/' && hasAgent) {
+      if (inChat && e.key === '/' && hasAgent) {
         e.preventDefault();
         setComposer(c => (c.value || c.workflow ? c : { ...c, value: '/' }));
         focusComposer(true);
@@ -255,77 +321,75 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [focusComposer]);
 
+  // Name each page in the tab title, so history and screen readers say where you are.
+  useEffect(() => {
+    document.title = view === 'landing' ? 'AgentVerse | AI Agent Platform' : `${route.unknown ? 'Not found' : navItem(page).label} · AgentVerse`;
+  }, [view, page, route.unknown]);
+
   // The landing page is always dark; the workspace follows the theme. The swarm only shows on dark surfaces.
   const darkSurface = view === 'landing' || theme === 'dark';
   const openBuilder = useCallback((draft?: AgentDraft) => { go('app'); openCreator(null, draft ?? EMPTY_DRAFT); }, [go, openCreator]);
 
+  const renderPage = () => {
+    if (route.unknown) return <NotFoundPage />;
+    switch (page) {
+      case 'chat':
+        return (
+          <ChatPage
+            selectedKey={selectedKey} onSelect={selectAgent}
+            chatWindow={{
+              agent: activeAgent, messages, streaming, workflows, value: composer.value, workflow: composer.workflow,
+              onValueChange: value => setComposer(c => ({ ...c, value })),
+              onWorkflowChange: workflow => setComposer(c => ({ ...c, workflow })),
+              onSend: send, onStop: () => selectedKey && chat.stop(selectedKey), onNewChat: newChat, onBack: () => setSelectedKey(null),
+              onCopyChat: () => void copyChat(), onDownloadChat: downloadChat, inputRef
+            }}
+          />
+        );
+      case 'command-center': return <CommandCenterPage />;
+      case 'discover': return <DiscoverPage />;
+      case 'my-agents': return <MyAgentsPage />;
+      case 'builder': return <BuilderPage />;
+      case 'workflows': return <WorkflowsPage />;
+      case 'settings': return <SettingsPage />;
+      default: return <PlannedPage item={navItem(page)} />;
+    }
+  };
+
   return (
-    <div className="relative min-h-dvh">
-      {darkSurface && <FxBackground view={view} />}
-      {darkSurface && <div aria-hidden className="grain" />}
-      <CustomCursor />
+    <WorkspaceContext.Provider value={ws}>
+      <div className="relative min-h-dvh">
+        {darkSurface && <FxBackground view={view} />}
+        {darkSurface && <div aria-hidden className="grain" />}
+        <CustomCursor />
 
-      {view === 'landing' ? (
-        <LandingPage
-          agents={agents} workflows={workflows} mode={mode}
-          onLaunch={() => go('app')} onOpenAgent={selectAgent} onRunWorkflow={startWorkflow}
-          onOpenBuilder={openBuilder} onOpenPalette={() => setPaletteOpen(true)}
-          onOpenDocs={() => setDocsOpen(true)} onOpenShortcuts={() => setShortcutsOpen(true)}
-        />
-      ) : (
-      <>
-      <Navbar
-        agentCount={agents.length} mode={mode} theme={theme}
-        onToggleTheme={() => setTheme(t => (t === 'dark' ? 'light' : 'dark'))}
-        onOpenPalette={() => setPaletteOpen(true)} onOpenShortcuts={() => setShortcutsOpen(true)} onOpenDocs={() => setDocsOpen(true)}
-        onCreateAgent={() => openCreator(null)} onHome={() => go('landing')}
-      />
-
-      <main className="relative z-10 mx-auto max-w-7xl px-3 py-4 sm:px-6 lg:py-6">
-        {loadError ? (
-          <div role="alert" className="glass mx-auto mt-16 max-w-md rounded-2xl p-8 text-center">
-            <p className="text-lg font-semibold">Could not load the agents</p>
-            <p className="mt-1 text-sm text-muted">The server did not answer. Check your connection and try again.</p>
-            <button type="button" onClick={() => void load()} className="mt-4 rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-on-accent">Retry</button>
-          </div>
+        {view === 'landing' ? (
+          <LandingPage
+            agents={agents} workflows={workflows} mode={mode}
+            onLaunch={() => go('app')} onOpenAgent={selectAgent} onRunWorkflow={startWorkflow}
+            onOpenBuilder={openBuilder} onOpenPalette={() => setPaletteOpen(true)}
+            onOpenDocs={() => setDocsOpen(true)} onOpenShortcuts={() => setShortcutsOpen(true)}
+          />
         ) : (
-          <div className="grid grid-cols-1 gap-4 lg:h-[calc(100dvh-132px)] lg:min-h-[620px] lg:grid-cols-12 lg:gap-6">
-            <div className={`min-h-0 min-w-0 lg:col-span-4 lg:block ${selectedKey ? 'hidden' : 'block'}`}>
-              <AgentSidebar
-                agents={agents} customAgents={customAgents} selectedKey={selectedKey} activeKeys={chat.streamingKeys} onSelect={selectAgent}
-                onCreate={() => openCreator(null)} onImport={() => triggerImport(null)}
-                onEditCustom={id => { const a = customAgents.find(x => x.id === id); if (a) openCreator(id, draftOf(a)); }}
-                onExportCustom={id => { const a = customAgents.find(x => x.id === id); if (a) setExportDraft(draftOf(a)); }}
-                onImportInto={id => triggerImport(id)}
-              />
-            </div>
-            <div className={`min-h-0 min-w-0 lg:col-span-8 lg:block ${selectedKey ? 'block' : 'hidden'}`}>
-              <ChatWindow
-                agent={activeAgent} messages={messages} streaming={streaming} workflows={workflows}
-                value={composer.value} workflow={composer.workflow}
-                onValueChange={value => setComposer(c => ({ ...c, value }))}
-                onWorkflowChange={workflow => setComposer(c => ({ ...c, workflow }))}
-                onSend={send} onStop={() => selectedKey && chat.stop(selectedKey)} onNewChat={newChat} onBack={() => setSelectedKey(null)}
-                onCopyChat={() => void copyChat()} onDownloadChat={downloadChat} inputRef={inputRef}
-              />
-            </div>
-          </div>
+          <AppShell page={route.unknown ? 'chat' : page} onHome={() => go('landing')}>
+            <Suspense fallback={<div className="flex justify-center py-20"><Spinner label="Loading page" size={20} /></div>}>
+              {renderPage()}
+            </Suspense>
+          </AppShell>
         )}
-      </main>
-      </>
-      )}
 
-      <input ref={importInput} type="file" accept=".json,application/json" className="sr-only" tabIndex={-1} aria-hidden data-testid="global-import-input"
-        onChange={e => { void onImportFile(e.target.files?.[0]); e.target.value = ''; }} />
+        <input ref={importInput} type="file" accept=".json,application/json" className="sr-only" tabIndex={-1} aria-hidden data-testid="global-import-input"
+          onChange={e => { void onImportFile(e.target.files?.[0]); e.target.value = ''; }} />
 
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
-      <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
-      <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} />
-      <AgentCreator
-        open={creator.open} onClose={closeCreator} initial={creator.draft} initialWarnings={creator.warnings} editing={!!creator.editingId}
-        onSave={saveAgent} onDelete={deleteAgent} onExport={setExportDraft}
-      />
-      <AgentExportModal draft={exportDraft} onClose={() => setExportDraft(null)} />
-    </div>
+        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} commands={commands} />
+        <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
+        <DocsModal open={docsOpen} onClose={() => setDocsOpen(false)} />
+        <AgentCreator
+          open={creator.open} onClose={closeCreator} initial={creator.draft} initialWarnings={creator.warnings} editing={!!creator.editingId}
+          onSave={saveAgent} onDelete={deleteAgent} onExport={setExportDraft}
+        />
+        <AgentExportModal draft={exportDraft} onClose={() => setExportDraft(null)} />
+      </div>
+    </WorkspaceContext.Provider>
   );
 }
