@@ -26,7 +26,7 @@ const pageErrors = [], badRequests = [];
 page.on('pageerror', e => pageErrors.push(e.message));
 page.on('response', r => { if (r.status() >= 500) badRequests.push(`${r.status()} ${r.url()}`); });
 const chatBodies = [];
-page.on('request', r => { if (r.url().endsWith('/api/chat') && r.method() === 'POST') chatBodies.push(JSON.parse(r.postData() || '{}')); });
+page.on('request', r => { if (/\/api(\/v1)?\/chat$/.test(r.url()) && r.method() === 'POST') chatBodies.push(JSON.parse(r.postData() || '{}')); });
 
 const composer = () => page.getByRole('combobox', { name: 'Message' });
 const idle = () => page.waitForFunction(() => !!document.querySelector('[aria-label="Send message"]'), null, { timeout: 40000 });
@@ -126,7 +126,7 @@ check('3  expanded: names the agent, role, status badge for each handoff', /Rese
 await page.getByTestId('thought-step').first().getByRole('button', { name: /Show output/ }).click();
 check('3  each intermediate step can show its real output', /Demo output/.test(await page.getByTestId('thought-step').first().textContent()));
 check('3  the final answer is the reply below the drawer', /Deep Research Brief/.test(await page.getByTestId('msg-assistant').last().textContent()));
-check('3  workflow request used workflowId (one /api/chat request for all 3 steps)', chatBodies.at(-1)?.workflowId === 'research' && !chatBodies.at(-1)?.agentId);
+check('3  workflow request used workflowId (one /api/v1/chat request for all 3 steps)', chatBodies.at(-1)?.workflowId === 'research' && !chatBodies.at(-1)?.agentId);
 await shot(page, '03-thought-stream');
 
 // ============ 6. Chat export ============
@@ -262,16 +262,16 @@ check('4  corrupt saved data is ignored instead of crashing the app', (await pag
 
 // ============ error handling in chat ============
 await page.locator('[data-agent="translator"]').click();
-await page.route('**/api/chat', r => r.fulfill({ status: 429, contentType: 'application/json', body: '{"error":"Too many requests"}' }));
+await page.route('**/api/v1/chat', r => r.fulfill({ status: 429, contentType: 'application/json', body: '{"error":"Too many requests"}' }));
 await composer().fill('hi'); await page.keyboard.press('Enter');
 await page.getByRole('alert').filter({ hasText: 'too fast' }).waitFor();
 check('E  a 429 shows a friendly "too fast" message, input is usable again', await composer().isEnabled());
-await page.unroute('**/api/chat');
-await page.route('**/api/chat', r => r.abort('failed'));
+await page.unroute('**/api/v1/chat');
+await page.route('**/api/v1/chat', r => r.abort('failed'));
 await composer().fill('hi again'); await page.keyboard.press('Enter');
 await page.getByRole('alert').filter({ hasText: 'Could not reach the server' }).waitFor();
 check('E  a network failure shows a clear error, no crash', true);
-await page.unroute('**/api/chat');
+await page.unroute('**/api/v1/chat');
 
 // ============ responsive ============
 const m = await (await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })).newPage();

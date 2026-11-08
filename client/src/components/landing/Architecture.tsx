@@ -7,7 +7,7 @@ import { SectionHeading } from './SectionHeading';
 const NODES = [
   { icon: '🖥️', title: 'Browser', sub: 'holds the chat' },
   { icon: '🛡️', title: 'Rate limit', sub: 'per-IP limiter' },
-  { icon: '⚙️', title: '/api/chat', sub: 'validates, stateless' },
+  { icon: '⚙️', title: '/api/v1/chat', sub: 'validates, stateless' },
   { icon: '🧭', title: 'Workflow runner', sub: 'one call per step' },
   { icon: '🤖', title: 'Agent', sub: 'prompt + role' },
   { icon: '✨', title: 'Gemini / OpenAI', sub: 'streams tokens' }

@@ -1,22 +1,13 @@
+import type { ChatEvent, PublicAgent } from '../../server/src/contracts';
+
 export type Theme = 'dark' | 'light';
 
 /** Simulated tools an agent may be permitted to use (nothing is actually searched, run or sent). */
 export const TOOL_IDS = ['web_search', 'code_interpreter', 'file_reader', 'ticket_system', 'email_sender', 'knowledge_base', 'calculator'] as const;
 export type ToolId = (typeof TOOL_IDS)[number];
 
-/** A built-in agent, as served by GET /api/agents. */
-export interface Agent {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  icon: string;
-  color: string;
-  gradient: string;
-  tools: string[];
-  mostUsed: boolean;
-  useCase: string;
-}
+/** A built-in agent, as served by GET /api/v1/agents. */
+export type Agent = PublicAgent;
 
 /** What the user edits in the agent creator, and what is exported to / imported from JSON. */
 export interface AgentDraft {
@@ -91,14 +82,8 @@ export interface Message {
   workflowId?: string;
 }
 
-/** Events the server streams back from POST /api/chat. */
-export type ServerEvent =
-  | { type: 'plan'; workflowId: string; steps: Array<Omit<TraceStep, 'output' | 'startedAt' | 'endedAt'>> }
-  | { type: 'step'; id: string; status: StepStatus; error?: string }
-  | { type: 'step_delta'; id: string; content: string }
-  | { type: 'stream'; content: string }
-  | { type: 'error'; content: string }
-  | { type: 'done'; message: { role: 'assistant'; content: string } | null };
+/** Events the server streams back from POST /api/v1/chat (defined once, in the API's contracts). */
+export type ServerEvent = ChatEvent;
 
 export interface Command {
   id: string;

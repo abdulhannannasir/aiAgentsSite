@@ -1,5 +1,5 @@
 /** @type {import('tailwindcss').Config} */
-module.exports = {
+export default {
   content: ['./client/index.html', './client/src/**/*.{ts,tsx}'],
   darkMode: 'class',
   // Agent gradients arrive from the API at runtime ("from-blue-500 to-indigo-600"), so Tailwind can't see

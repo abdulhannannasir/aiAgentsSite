@@ -1,4 +1,5 @@
 import { readSSE } from './sse';
+import type { HealthResponse, MetaResponse } from '../../../server/src/contracts';
 import type { Agent, AgentDraft, ServerEvent, Workflow } from '../types';
 
 export class ApiError extends Error {
@@ -8,15 +9,24 @@ export class ApiError extends Error {
   }
 }
 
+/** Reads the message from an API error body: `{ error: { message } }` (v1), or the older `{ error: "..." }`. */
+export function errorMessage(body: unknown): string {
+  const e = (body as { error?: unknown } | null)?.error;
+  if (typeof e === 'string') return e;
+  if (e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string') return (e as { message: string }).message;
+  return '';
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url);
   if (!res.ok) throw new ApiError(res.status, `Request failed (${res.status})`);
   return (await res.json()) as T;
 }
 
-export const fetchAgents = () => getJson<Agent[]>('/api/agents');
-export const fetchWorkflows = () => getJson<Workflow[]>('/api/workflows');
-export const fetchHealth = () => getJson<{ ok: boolean; mode: 'live' | 'demo'; provider: string; agents: number }>('/api/health');
+export const fetchAgents = () => getJson<Agent[]>('/api/v1/agents');
+export const fetchWorkflows = () => getJson<Workflow[]>('/api/v1/workflows');
+export const fetchHealth = () => getJson<HealthResponse>('/api/v1/health');
+export const fetchMeta = () => getJson<MetaResponse>('/api/v1/meta');
 
 export interface ChatRequest {
   message: string;
@@ -28,7 +38,7 @@ export interface ChatRequest {
 
 /** POSTs a chat message and reports each streamed server event. Throws ApiError for non-2xx responses. */
 export async function streamChat(request: ChatRequest, signal: AbortSignal, onEvent: (event: ServerEvent) => void): Promise<void> {
-  const res = await fetch('/api/chat', {
+  const res = await fetch('/api/v1/chat', {
     method: 'POST',
     signal,
     headers: { 'Content-Type': 'application/json' },
@@ -38,7 +48,7 @@ export async function streamChat(request: ChatRequest, signal: AbortSignal, onEv
   if (!res.ok || !res.body) {
     let detail = '';
     try {
-      detail = ((await res.json()) as { error?: string }).error ?? '';
+      detail = errorMessage(await res.json());
     } catch {
       /* body was not JSON */
     }

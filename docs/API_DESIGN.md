@@ -13,8 +13,8 @@
 { "error": { "code": "VALIDATION_ERROR", "message": "Message too long (max 4000 characters)", "requestId": "…", "details": {} } }
 ```
 
-For backwards compatibility with the existing client, error bodies on the legacy aliases also include a top-level
-string `error` message — clients should read `error.message` when `error` is an object.
+The client helper `errorMessage()` (`client/src/lib/api.ts`) reads `error.message`, and still understands the
+older `{ "error": "text" }` shape.
 
 | HTTP | code | When |
 | --- | --- | --- |
@@ -60,7 +60,7 @@ string `error` message — clients should read `error.message` when `error` is a
 }
 ```
 
-SSE events (unchanged from the baseline, typed in `shared/contracts.ts`):
+SSE events (unchanged from the baseline, typed in `server/src/contracts.ts` and imported by the client):
 
 | type | payload |
 | --- | --- |

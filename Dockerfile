@@ -1,18 +1,19 @@
-# ---- build the React front end ----
-FROM node:20-alpine AS build
+# ---- build the React front end and compile the TypeScript API ----
+FROM node:22-alpine AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
-# ---- slim runtime image: just the Express server + the built front end ----
-FROM node:20-alpine
+# ---- slim runtime image: compiled API + built front end + production dependencies ----
+FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev
-COPY server.js workflows.js ./
+COPY server.js ./
+COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/public ./public
 
 USER node
