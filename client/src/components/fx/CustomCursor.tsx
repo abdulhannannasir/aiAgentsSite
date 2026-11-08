@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useFx } from '../../lib/fx/capability';
-import { isTrailJump, segmentFade } from '../../lib/fx/trail';
+import { followTrailPoint } from '../../lib/fx/trail';
 
 const TRAIL = 20;
 const INTERACTIVE = 'a[href], button, [role="button"], [role="option"], [role="menuitem"], [role="tab"], summary, label, select, input[type="checkbox"], input[type="radio"], input[type="range"], [data-cursor]';
@@ -100,12 +100,13 @@ export function CustomCursor() {
       // Over a labelled disc the dot would cover the label; over a control the ring does the talking.
       dotEl.style.scale = hover.mode === 'card' && hover.label ? '0' : hover.mode === 'magnet' || hover.mode === 'card' ? '0.45' : '1';
 
-      // Trail: each point eases toward the one ahead of it, which gives the fluid tail.
+      // Trail: each point eases toward the one ahead of it and is held within a few pixels of it (see lib/fx/trail.ts),
+      // which gives a fluid tail whose length can never exceed a short comet, whatever the pointer speed.
       pts[0].x = pos.x; pts[0].y = pos.y;
       let spread = 0;
       for (let i = 1; i < TRAIL; i++) {
         const p = pts[i], q = pts[i - 1];
-        p.x += (q.x - p.x) * 0.38; p.y += (q.y - p.y) * 0.38;
+        followTrailPoint(p, q, dt);
         spread = Math.max(spread, Math.abs(q.x - p.x) + Math.abs(q.y - p.y));
       }
       if (dirty) ctx.clearRect(dirty[0], dirty[1], dirty[2], dirty[3]);
@@ -115,11 +116,8 @@ export function CustomCursor() {
       ctx.globalCompositeOperation = 'lighter';
       for (let i = TRAIL - 1; i >= 1; i--) {
         const f = 1 - i / TRAIL;
-        // A segment stretched far beyond normal gesture speed fades out instead of drawing a long bright streak.
-        const stretch = segmentFade(Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
         minX = Math.min(minX, pts[i].x); maxX = Math.max(maxX, pts[i].x); minY = Math.min(minY, pts[i].y); maxY = Math.max(maxY, pts[i].y);
-        if (stretch <= 0) continue;
-        const a = (0.42 * f * fade * stretch).toFixed(3);
+        const a = (0.42 * f * fade).toFixed(3);
         ctx.strokeStyle = i < TRAIL / 2 ? `rgba(34,211,238,${a})` : `rgba(167,139,250,${a})`;
         ctx.lineWidth = 0.5 + 3.6 * f;
         ctx.beginPath(); ctx.moveTo(pts[i].x, pts[i].y); ctx.lineTo(pts[i - 1].x, pts[i - 1].y); ctx.stroke();
@@ -134,15 +132,10 @@ export function CustomCursor() {
 
     const onMove = (e: PointerEvent) => {
       if (e.pointerType !== 'mouse') { if (shown) show(false); return; }
-      // An impossibly long single move is a jump, not a gesture: start the trail afresh at the new spot
-      // (the ring still eases over, which looks natural) so it never stretches into a streak across the screen.
-      const jumped = shown && isTrailJump(e.clientX - pos.x, e.clientY - pos.y);
       pos.x = e.clientX; pos.y = e.clientY; lastMove = performance.now();
       if (!shown) {
         show(true);
         ringP.x = pos.x; ringP.y = pos.y; pts.forEach(p => { p.x = pos.x; p.y = pos.y; });
-      } else if (jumped) {
-        pts.forEach(p => { p.x = pos.x; p.y = pos.y; });
       }
       if (e.target !== lastTarget) { lastTarget = e.target; setHover(classify(e.target)); }
       wake();

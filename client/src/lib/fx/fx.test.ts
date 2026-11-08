@@ -3,7 +3,7 @@ import { buildNetwork, mulberry32, nodesForQuality } from './network';
 import { decideTier, type FxEnv } from './capability';
 import { activityLevel, FULL_ACTIVITY_CPS, smoothLevel } from './activity';
 import { parseView } from '../route';
-import { isTrailJump, segmentFade, TRAIL_FADE_START_PX, TRAIL_JUMP_PX, TRAIL_MAX_SEGMENT_PX } from './trail';
+import { followTrailPoint, TRAIL_FOLLOW_RATE, TRAIL_MAX_GAP_PX, type TrailPoint } from './trail';
 
 const desktop: FxEnv = { reducedMotion: false, coarsePointer: false, webgl: true, saveData: false, cores: 8, memoryGb: 8, width: 1440 };
 
@@ -140,40 +140,75 @@ describe('parseView', () => {
   });
 });
 
-describe('cursor trail rules', () => {
-  it('treats only an impossibly long single move as a jump', () => {
-    expect(isTrailJump(0, 0)).toBe(false);
-    expect(isTrailJump(60, 0)).toBe(false); // a fast flick in one 60 Hz frame is ~70 px
-    expect(isTrailJump(200, 150)).toBe(false); // 250 px, still a (very fast) gesture
-    expect(isTrailJump(TRAIL_JUMP_PX, 0)).toBe(false); // the threshold itself is not past it
-    expect(isTrailJump(TRAIL_JUMP_PX + 1, 0)).toBe(true);
-    expect(isTrailJump(900, 600)).toBe(true); // a 1,000 px teleport
-    expect(isTrailJump(-1100, 0)).toBe(true); // direction does not matter
-  });
+describe('cursor trail', () => {
+  const POINTS = 20; // as in CustomCursor
+  const chain = (x: number, y: number): TrailPoint[] => Array.from({ length: POINTS }, () => ({ x, y }));
+  /** One animation frame: the head goes to the pointer and every other point follows the one ahead. */
+  const frame = (pts: TrailPoint[], x: number, y: number, dt: number) => {
+    pts[0].x = x; pts[0].y = y;
+    for (let i = 1; i < pts.length; i++) followTrailPoint(pts[i], pts[i - 1], dt);
+  };
+  const tail = (pts: TrailPoint[]) => Math.hypot(pts[0].x - pts[pts.length - 1].x, pts[0].y - pts[pts.length - 1].y);
+  const maxGap = (pts: TrailPoint[]) => Math.max(...pts.slice(1).map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y)));
 
-  it('draws short segments at full strength and drops over-stretched ones', () => {
-    expect(segmentFade(0)).toBe(1);
-    expect(segmentFade(40)).toBe(1);
-    expect(segmentFade(TRAIL_FADE_START_PX)).toBe(1);
-    expect(segmentFade(TRAIL_MAX_SEGMENT_PX)).toBe(0);
-    expect(segmentFade(1100)).toBe(0);
-  });
-
-  it('fades smoothly and monotonically between the two limits', () => {
-    const mid = (TRAIL_FADE_START_PX + TRAIL_MAX_SEGMENT_PX) / 2;
-    expect(segmentFade(mid)).toBeCloseTo(0.5);
-    let prev = 1;
-    for (let len = TRAIL_FADE_START_PX; len <= TRAIL_MAX_SEGMENT_PX; len += 5) {
-      const f = segmentFade(len);
-      expect(f).toBeLessThanOrEqual(prev + 1e-12);
-      expect(f).toBeGreaterThanOrEqual(0);
-      prev = f;
+  it('holds a point within the maximum gap of its neighbour, even after a huge jump', () => {
+    for (const [px, py] of [[1000, 0], [0, -1000], [700, 700], [8, 0], [3, 4]]) {
+      const p = { x: px, y: py };
+      followTrailPoint(p, { x: 0, y: 0 }, 1 / 60);
+      expect(Math.hypot(p.x, p.y)).toBeLessThanOrEqual(TRAIL_MAX_GAP_PX + 1e-9);
     }
   });
 
-  it('never returns a bad opacity for bad input', () => {
-    expect(segmentFade(Number.NaN)).toBe(0);
-    expect(segmentFade(Infinity)).toBe(0);
-    expect(segmentFade(-5)).toBe(1);
+  it('leaves a point that is already close alone apart from easing it in', () => {
+    const p = { x: 3, y: 0 };
+    followTrailPoint(p, { x: 0, y: 0 }, 1 / 60);
+    expect(p.x).toBeGreaterThan(0);
+    expect(p.x).toBeLessThan(3);
+    expect(p.y).toBe(0);
+  });
+
+  it('bounds the whole tail at every pointer speed, which the old easing did not', () => {
+    const limit = (POINTS - 1) * TRAIL_MAX_GAP_PX;
+    for (const speed of [1, 2, 5, 10, 20, 40, 80, 300, 2000]) { // px per frame, from a crawl to a teleport
+      const pts = chain(0, 0);
+      let x = 0, longest = 0;
+      for (let f = 0; f < 120; f++) { x += speed; frame(pts, x, 0, 1 / 60); longest = Math.max(longest, tail(pts), maxGap(pts) * (POINTS - 1)); }
+      expect(longest).toBeLessThanOrEqual(limit + 1e-6);
+    }
+  });
+
+  it('still grows with speed up to the cap, so a faster flick looks faster', () => {
+    const lengthAt = (speed: number) => { const pts = chain(0, 0); let x = 0; for (let f = 0; f < 120; f++) { x += speed; frame(pts, x, 0, 1 / 60); } return tail(pts); };
+    expect(lengthAt(1)).toBeLessThan(lengthAt(2));
+    expect(lengthAt(2)).toBeLessThan(lengthAt(5));
+    expect(lengthAt(5)).toBeGreaterThan(0.85 * (POINTS - 1) * TRAIL_MAX_GAP_PX); // already near the cap
+    expect(lengthAt(40)).toBeCloseTo(lengthAt(5), 0); // beyond that, speed no longer lengthens it
+  });
+
+  it('collapses a stretched chain within a single frame (no streak survives a jump)', () => {
+    const pts = chain(0, 0);
+    frame(pts, 1100, 650, 1 / 60); // one event ~1,280 px away
+    expect(maxGap(pts)).toBeLessThanOrEqual(TRAIL_MAX_GAP_PX + 1e-9);
+    expect(tail(pts)).toBeLessThanOrEqual((POINTS - 1) * TRAIL_MAX_GAP_PX + 1e-9);
+  });
+
+  it('eases the same amount of distance over the same time at any refresh rate', () => {
+    // Close enough that the gap cap is not involved: only the time-based easing matters.
+    // 100 ms of frames at each rate (whole frames: 3, 6, 12 and 24).
+    const at = (hz: number) => { const p = { x: 5, y: 0 }; for (let i = 0; i < hz / 10; i++) followTrailPoint(p, { x: 0, y: 0 }, 1 / hz); return p.x; };
+    const expected = 5 * Math.exp(-TRAIL_FOLLOW_RATE * 0.1); // closing in for 100 ms
+    for (const hz of [30, 60, 120, 240]) expect(at(hz)).toBeCloseTo(expected, 9);
+  });
+
+  it('survives zero, negative and invalid time steps', () => {
+    for (const dt of [0, -1, Number.NaN, Infinity, 5]) {
+      const p = { x: 4, y: 3 };
+      followTrailPoint(p, { x: 0, y: 0 }, dt);
+      expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true);
+      expect(Math.hypot(p.x, p.y)).toBeLessThanOrEqual(TRAIL_MAX_GAP_PX + 1e-9);
+    }
+    const stay = { x: 4, y: 3 };
+    followTrailPoint(stay, { x: 0, y: 0 }, 0);
+    expect(stay).toEqual({ x: 4, y: 3 }); // no movement without time passing
   });
 });
