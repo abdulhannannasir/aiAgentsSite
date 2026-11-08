@@ -216,7 +216,11 @@ await page.getByRole('button', { name: 'Cancel', exact: true }).click();
 check('4  cancel leaves the agent untouched', (await page.getByTestId('custom-agent-card').first().getAttribute('data-agent-name')) === 'Pirate Bot');
 // import errors (reopen IMMEDIATELY, while the previous dialog is still animating out)
 await page.getByRole('button', { name: 'Edit Pirate Bot' }).click();
-check('4  reopening right after closing starts a fresh form (no stale imported state)', (await page.getByLabel('Name', { exact: true }).inputValue()) === 'Pirate Bot' && (await page.getByTestId('import-message').count()) === 0);
+// While the old dialog animates out, two dialogs exist for a moment. getByRole skips the one that is aria-hidden
+// (leaving), so these locators always mean the NEW dialog, whatever the animation timing.
+const liveCreator = page.getByRole('dialog', { name: 'Agent settings' });
+check('4  reopening right after closing starts a fresh form (no stale imported state)', (await liveCreator.getByLabel('Name', { exact: true }).inputValue()) === 'Pirate Bot' && (await liveCreator.getByTestId('import-message').count()) === 0);
+await page.waitForFunction(() => document.querySelectorAll('[role="dialog"]').length === 1, null, { timeout: 5000 }); // let the old one finish leaving before the next steps
 const errs = [
   ['not json at all {', /not valid JSON/i, 'invalid JSON'],
   [JSON.stringify([1, 2, 3]), /JSON object/i, 'array instead of object'],

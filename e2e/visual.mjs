@@ -131,6 +131,23 @@ await page.mouse.move(520, 790, { steps: 22 }); // ~10 px per event, over empty 
 const tail = await trailMax({ x: 380, y: 770, w: 150, h: 40 }, [0, 16, 40]);
 check('cursor trail: ordinary movement still leaves a visible tail', tail > 150, `${tail} lit px behind the pointer`);
 
+// A brisk steady sweep must leave a short comet tail, not a glowing line across the screen. Pointer events are sent
+// one per animation frame (20 px each = 1,200 px/s at 60 Hz) so the speed is exact whatever this machine's frame rate.
+await page.mouse.move(700, 700); await sleep(600);
+const sweep = await page.evaluate(async () => {
+  const send = (x, y) => window.dispatchEvent(new PointerEvent('pointermove', { clientX: x, clientY: y, pointerType: 'mouse', bubbles: true }));
+  const y = window.innerHeight - 60; let x = 20;
+  send(x, y); await new Promise(r => setTimeout(r, 500));
+  await new Promise(done => { let n = 0; const f = () => { x += 20; send(x, y); if (++n < 26) requestAnimationFrame(f); else done(); }; requestAnimationFrame(f); });
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  const cv = document.querySelector('[data-testid=fx-cursor] canvas');
+  const d = cv.getContext('2d').getImageData(0, y - 12, cv.width, 24).data; let minX = cv.width;
+  for (let i = 3; i < d.length; i += 4) if (d[i] > 8) minX = Math.min(minX, (i >> 2) % cv.width);
+  return Math.max(0, Math.round(x - minX));
+});
+check('cursor trail: a brisk 1,200 px/s sweep leaves a short comet tail, not a streak (<= 200 px)', sweep <= 200, `${sweep} px (it was ~535 px before the cap)`);
+check('cursor trail: that tail is still clearly visible (>= 40 px)', sweep >= 40, `${sweep} px`);
+
 // ---- agent deck: 3D tilt, spotlight border, status glow
 await scrollTo(page, await sectionTop(page, 'agents') - 70, 1500);
 const deck = page.locator('[data-agent-card]');
