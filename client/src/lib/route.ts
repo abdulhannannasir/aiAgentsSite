@@ -6,7 +6,10 @@ import { useCallback, useSyncExternalStore } from 'react';
  *   #/app           the chat workspace (kept as the app's front door so existing links still work)
  *   #/app/<page>    other app pages (command-center, discover, my-agents, …)
  */
-export type View = 'landing' | 'app';
+export type View = 'landing' | 'app' | 'auth';
+
+export const AUTH_PAGES = ['sign-in', 'sign-up', 'forgot-password', 'reset-password', 'verified'] as const;
+export type AuthPageId = (typeof AUTH_PAGES)[number];
 
 export const PAGE_IDS = [
   'chat', 'command-center', 'discover', 'my-agents', 'builder', 'workflows',
@@ -19,11 +22,22 @@ export interface Route {
   page: PageId;
   /** True when the hash named an app page that does not exist (shown as "page not found", never a blank screen). */
   unknown: boolean;
+  /** Set when view is 'auth'. */
+  authPage?: AuthPageId;
+  /** Query parameters inside the hash (e.g. #/auth/verified?error=…). */
+  params?: Record<string, string>;
 }
 
 const isPage = (s: string): s is PageId => (PAGE_IDS as readonly string[]).includes(s);
 
 export function parseRoute(hash: string): Route {
+  const a = /^#\/auth\/([a-z-]+)\/?(?:\?(.*))?$/.exec(hash);
+  if (a) {
+    const params = Object.fromEntries(new URLSearchParams(a[2] ?? ''));
+    return (AUTH_PAGES as readonly string[]).includes(a[1])
+      ? { view: 'auth', page: 'chat', unknown: false, authPage: a[1] as AuthPageId, params }
+      : { view: 'auth', page: 'chat', unknown: true, authPage: 'sign-in', params };
+  }
   const m = /^#\/app(?:\/([^/?#]*))?\/?(?:[?].*)?$/.exec(hash);
   if (!m) return { view: 'landing', page: 'chat', unknown: false };
   const segment = (m[1] ?? '').toLowerCase();
@@ -58,6 +72,9 @@ function setHash(target: string) {
   window.scrollTo(0, 0);
 }
 
+export const authHref = (p: AuthPageId) => `#/auth/${p}`;
+export const goAuth = (p: AuthPageId) => setHash(authHref(p));
+
 export function useRoute(): [Route, (page: PageId) => void] {
   const route = useSyncExternalStore(subscribe, snapshot, serverSnapshot);
   const navigate = useCallback((page: PageId) => setHash(pageHref(page)), []);
@@ -67,6 +84,6 @@ export function useRoute(): [Route, (page: PageId) => void] {
 /** The original two-screen API, still used by the landing page and the palette. */
 export function useView(): [View, (v: View) => void] {
   const [route] = useRoute();
-  const go = useCallback((v: View) => setHash(v === 'app' ? '#/app' : '#/'), []);
+  const go = useCallback((v: View) => setHash(v === 'app' ? '#/app' : v === 'auth' ? '#/auth/sign-in' : '#/'), []);
   return [route.view, go];
 }

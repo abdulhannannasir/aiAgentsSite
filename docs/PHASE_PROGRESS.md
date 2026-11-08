@@ -6,7 +6,7 @@ Single source of truth for where the 12-phase build stands. Updated at the end o
 | --- | --- | --- |
 | 0 | Audit and architecture foundation | ✅ Done |
 | 1 | UI architecture and design system | ✅ Done |
-| 2 | Auth, database, user management | ⚪ Not started |
+| 2 | Auth, database, user management | ✅ Done (team invitations UI deferred, see below) |
 | 3 | Agent marketplace | ⚪ Not started (42 agents + builder exist from before) |
 | 4 | Real AI execution engine | ⚪ Not started (OpenAI/Gemini streaming exist from before) |
 | 5 | Multi-agent orchestration | ⚪ Not started (4 sequential workflows exist from before) |
@@ -102,3 +102,59 @@ keyboard navigation, collapse persistence, page actions, phone overflow on all 1
 * Command Center figures are per browser tab until execution records exist (Phase 2 persistence, Phase 9 metrics);
   the page says so.
 * The 3D swarm still renders behind data pages on the `high` tier (capped at 30 fps); revisit in Phase 11 performance.
+
+### Phase 2 — authentication, database and user management (2026-11-08)
+
+**Implemented**
+* PostgreSQL + Prisma 7 (pg driver adapter). Schema and first migration: users, sessions, accounts, verifications,
+  workspaces, members, invitations, agents + immutable versions, conversations, messages, executions, usage records,
+  audit log, notifications. `npm run release` applies migrations on deploy (skips when no database is configured).
+* Better Auth: email + password (scrypt hashes), email verification (required by default when SMTP is configured),
+  password reset (1-hour links, all sessions revoked), database sessions in httpOnly SameSite=Lax cookies (secure in
+  production), organization plugin = workspaces with owner / admin / member, admin plugin = platform roles
+  user / admin / superadmin. Origin/CSRF checks pinned on (Better Auth turns them off under test runners); our own
+  cookie-authenticated writes get the same origin rule. Built-in rate limits on sign-in/up and email sending.
+* Every account gets a personal workspace; sessions open in it; workspaces can be created and switched.
+* Server-side authorization: the workspace always comes from the session's membership (re-checked on every request;
+  removing a member takes effect immediately); other workspaces' ids answer 404. Private agents are visible only to
+  their creator; members edit their own agents, admins/owners edit any workspace agent.
+* Saved custom agents with versions and sharing; bulk import; saved conversations with server-side history,
+  execution records (status, provider, model, model calls, agent version) and usage metering; audit entries for
+  sign-up, sessions, workspace and agent changes.
+* Mailer: SMTP via nodemailer when `SMTP_URL` is set; otherwise development logs the message, production logs an error
+  and sends nothing (links are secrets).
+* Frontend: sign-in, create-account, forgot/reset-password and email-confirmed screens (`#/auth/*`); account menu
+  with the signed-in user and sign-out; real workspace switcher with "New workspace"; My Agents shows versions, sharing,
+  creator and permission-aware actions, plus an explicit "Move to <workspace>" for agents made as a guest; chats
+  restore when you reopen an agent; Settings shows the account. Every sign-in, sign-out and workspace switch clears
+  the in-memory chats so nothing crosses accounts.
+* Guest mode is unchanged when `DATABASE_URL`/`BETTER_AUTH_SECRET` are absent: account routes answer
+  503 `FEATURE_UNAVAILABLE` and the UI says accounts aren't enabled.
+
+**Tests** — typecheck ✅ · client unit 68/68 ✅ · server 82/82 ✅ (24 new PostgreSQL integration tests: sign-up/in/out,
+duplicate and weak passwords, verification-required flow, password reset, unknown-email reset, untrusted origins with
+and without cookies, workspace create/switch/isolation, private vs shared agents, member vs admin permissions,
+membership removal, versioning, all-or-nothing import, saved chats with server-side history, forged history ignored,
+cross-user conversation access, saved-agent prompt + version recorded, workflow trace and usage, failed runs, guests
+store nothing) · build ✅ · e2e features 79/79 ✅ · visual 76/76 ✅ · shell 69/69 ✅ · smoke 9/9 ✅ (all on a guest-mode
+server) · e2e accounts 27/27 ✅ (new, DB-backed server; stable over repeated runs, including the rate-limit paths).
+
+**Bugs found and fixed while testing**
+* Better Auth silently disables its origin/CSRF checks under test runners → pinned on explicitly.
+* The client told users to wait 10 s on any 429 although Better Auth's reset-email window is 60 s (it sends
+  `X-Retry-After`, not `Retry-After`) → the message now uses the real value, or none.
+
+**Database changes** — new: migration `20261108213506_init` (additive; there was no database before).
+
+**API changes** — new: `/api/auth/*`, `/api/v1/me`, `/api/v1/workspaces[/:id/activate]`, `/api/v1/custom-agents/*`,
+`/api/v1/conversations/*`; `POST /api/v1/chat` accepts `customAgentId`, `conversationId`, `threadKey` and emits a
+`conversation` event for signed-in users. `/api/v1/meta` reports `auth`/`email` from what actually works.
+
+**Known issues / deferred**
+* Inviting people to a workspace: the data model and Better Auth's organization endpoints exist, but the invitation
+  email + UI are not built yet (planned with Phase 3's sharing work). Membership changes are tested at the API level.
+* Profile editing (name, email change) and account deletion UI are not built yet.
+* Conversation history list (more than the latest conversation per agent) arrives with Phase 3/9.
+* Token counts stay empty until providers report usage (Phase 4); `modelCalls` is recorded now.
+* Not verified here: a real SMTP server, a Vercel/Railway deploy with a managed database (no credentials in this
+  environment). Run `node e2e/smoke.mjs <url>` after deploying.

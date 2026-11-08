@@ -71,7 +71,7 @@ SSE events (unchanged from the baseline, typed in `server/src/contracts.ts` and 
 | `error` | `{ content }` — user-safe message |
 | `done` | `{ message: { role: 'assistant', content } | null }` |
 
-### Phase 2 (auth, workspaces, persistence)
+### Phase 2 (auth, workspaces, persistence) — implemented
 
 | Method | Path | Description |
 | --- | --- | --- |
@@ -79,14 +79,22 @@ SSE events (unchanged from the baseline, typed in `server/src/contracts.ts` and 
 | GET | `/api/v1/me` | user, memberships, active workspace, role |
 | GET/POST | `/api/v1/workspaces` | list / create |
 | POST | `/api/v1/workspaces/:id/activate` | set active workspace on the session |
-| GET/POST | `/api/v1/custom-agents` | list / create (workspace-scoped) |
-| GET/PATCH/DELETE | `/api/v1/custom-agents/:id` | read / update (creates a new version) / delete |
-| POST | `/api/v1/custom-agents/import` | bulk import from guest `localStorage` (validated like agent files) |
+| GET/POST | `/api/v1/custom-agents` | list (workspace agents + your private ones) / create |
+| GET/PATCH/DELETE | `/api/v1/custom-agents/:id` | read / update (a config change creates a new version; creator or workspace admin/owner) / delete |
+| GET | `/api/v1/custom-agents/:id/versions` | version history |
+| POST | `/api/v1/custom-agents/import` | bulk import, all or nothing (1–30 agents, validated like agent files) |
 | GET | `/api/v1/conversations` | list (workspace + user scoped) |
 | GET/DELETE | `/api/v1/conversations/:id` | messages / delete |
 
-When signed in, `POST /api/v1/chat` accepts `conversationId` and `customAgentId`; the server loads history and the
-agent version from the database instead of trusting the client, and records an `AgentExecution` + usage.
+When signed in, `POST /api/v1/chat` also accepts `customAgentId`, `conversationId` and `threadKey` (the built-in agent
+id or `custom:<id>` the thread belongs to). The server saves the conversation, sends a first SSE event
+`{ "type": "conversation", "id" }`, loads history from the database instead of trusting the client, and records an
+`AgentExecution` (status, provider, model, model calls, agent version) and `UsageRecord`s. A conversation id from
+another user or workspace — or for a different agent — is a 404.
+
+Security: state-changing requests that carry a session cookie must come from `BETTER_AUTH_URL`, `CORS_ORIGINS` or
+the same host (403 otherwise); Better Auth applies the same origin check to `/api/auth/*` and rate-limits sign-in /
+sign-up (3 per 10 s per IP) and reset / verification emails (3 per minute), answering 429 with `X-Retry-After`.
 
 ### Later phases (shape reserved)
 

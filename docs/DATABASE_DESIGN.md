@@ -57,8 +57,12 @@ Workspace ─┬─ Agent ── AgentVersion ── AgentExecution ── Execu
 | `AuditLog` | id, workspaceId?, actorId?, action, targetType, targetId, metadata JSON, ip, createdAt | idx (workspaceId, createdAt desc) |
 | `Notification` | id, userId, workspaceId?, kind, title, body, link, readAt, createdAt | idx (userId, readAt, createdAt desc) |
 
-Better Auth model names are mapped to our naming in its config (`organization` → `Workspace` table, etc.) so the
-auth library and the domain share one schema and one migration history.
+Implementation note: the Prisma models keep Better Auth's names (`User`, `Session`, `Account`, `Verification`,
+`Organization`, `Member`, `Invitation`) and map them to plural snake_case tables (`users`, `workspaces`,
+`workspace_members`, `workspace_invitations`, …), so the auth library and the domain share one schema and one migration
+history. The custom-agent domain model is `Agent` (one row per agent, `visibility` PRIVATE | WORKSPACE) +
+`AgentVersion`; `Conversation.agentKey` is the built-in agent id or `custom:<agentId>`. Migration:
+`prisma/migrations/20261108213506_init`.
 
 ## Later-phase tables (added in their phase's migration)
 

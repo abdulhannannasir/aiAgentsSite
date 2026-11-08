@@ -19,11 +19,16 @@ export interface AgentDraft {
   tools: ToolId[];
 }
 
-/** A user-created agent, persisted in localStorage. */
+/** A user-created agent: in localStorage for guests, in the workspace (server) when signed in. */
 export interface CustomAgent extends AgentDraft {
   id: string;
   createdAt: number;
   updatedAt: number;
+  /** Saved agents only (signed in): who may edit it, who sees it, who made it, which version is current. */
+  canEdit?: boolean;
+  visibility?: 'PRIVATE' | 'WORKSPACE';
+  createdByName?: string | null;
+  version?: number;
 }
 
 /** The thing a chat thread is with: either a built-in or a custom agent, normalised for the UI. */

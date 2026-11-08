@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, ClipboardCopy, FileDown, Home, Keyboard, MessageSquarePlus, Moon, Plus, Sparkles, Sun, Upload } from 'lucide-react';
+import { BookOpen, ClipboardCopy, FileDown, Home, Keyboard, LogIn, LogOut, MessageSquarePlus, Moon, Plus, Sparkles, Sun, Upload } from 'lucide-react';
 import type { MetaResponse } from '../../server/src/contracts';
 import { AgentCreator } from './components/AgentCreator';
 import { AgentExportModal } from './components/AgentExportModal';
@@ -10,13 +10,14 @@ import { ShortcutsModal } from './components/ShortcutsModal';
 import { useToast } from './components/Toast';
 import { Spinner } from './components/ui/Display';
 import { useChat } from './hooks/useChat';
-import { fetchAgents, fetchHealth, fetchMeta, fetchWorkflows } from './lib/api';
+import { ApiError, fetchAgents, fetchHealth, fetchMeta, fetchWorkflows } from './lib/api';
+import { account as accountApi, auth as authApi, conversations, savedAgents, type Me, type SavedAgent } from './lib/account';
 import { EMPTY_DRAFT, MAX_AGENT_FILE_BYTES, isStoredAgent, parseAgentFile } from './lib/agentFile';
 import { chatFileName, chatToMarkdown, copyToClipboard, downloadTextFile } from './lib/chatExport';
 import { MOD, isEditableTarget } from './lib/platform';
 import { readStored, writeStored } from './lib/storage';
 import { useFx, type FxPref } from './lib/fx/capability';
-import { useRoute, useView } from './lib/route';
+import { goAuth, useRoute, useView } from './lib/route';
 import { CustomCursor } from './components/fx/CustomCursor';
 import { FxBackground } from './components/fx/FxBackground';
 import { LandingPage } from './components/landing/LandingPage';
@@ -34,6 +35,7 @@ const BuilderPage = lazy(() => import('./pages/BuilderPage'));
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const PlannedPage = lazy(() => import('./pages/PlannedPage'));
+const AuthPage = lazy(() => import('./pages/AuthPage'));
 const NotFoundPage = lazy(() => import('./pages/PlannedPage').then(m => ({ default: m.NotFoundPage })));
 
 const THEME_KEY = 'agentverse.theme';
@@ -45,6 +47,11 @@ const uid = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.r
 const isTheme = (v: unknown): v is Theme => v === 'dark' || v === 'light';
 const draftOf = (a: CustomAgent): AgentDraft => ({ name: a.name, description: a.description, icon: a.icon, systemPrompt: a.systemPrompt, temperature: a.temperature, tools: a.tools });
 const isDesktop = () => window.matchMedia('(min-width: 1024px)').matches;
+const fromSaved = (a: SavedAgent): CustomAgent => ({
+  id: a.id, name: a.name, description: a.description, icon: a.icon, systemPrompt: a.systemPrompt, temperature: a.temperature, tools: a.tools as CustomAgent['tools'],
+  createdAt: a.createdAt, updatedAt: a.updatedAt, canEdit: a.canEdit, visibility: a.visibility, createdByName: a.createdByName, version: a.version
+});
+const failure = (err: unknown) => (err instanceof Error ? err.message : 'Something went wrong. Please try again.');
 
 interface CreatorState { open: boolean; editingId: string | null; draft: AgentDraft; warnings: string[] }
 
@@ -90,11 +97,41 @@ export default function App() {
     writeStored(THEME_KEY, theme);
   }, [theme]);
 
-  const [customAgents, setCustomAgents] = useState<CustomAgent[]>(() => {
+  // Guests keep custom agents in this browser; signed-in users keep them in their workspace.
+  const [localAgents, setLocalAgents] = useState<CustomAgent[]>(() => {
     const raw = readStored<unknown>(AGENTS_KEY, []);
     return Array.isArray(raw) ? (raw.filter(isStoredAgent) as CustomAgent[]).slice(0, MAX_CUSTOM_AGENTS) : [];
   });
-  useEffect(() => { writeStored(AGENTS_KEY, customAgents); }, [customAgents]);
+  useEffect(() => { writeStored(AGENTS_KEY, localAgents); }, [localAgents]);
+
+  // ---- account
+  const [me, setMe] = useState<Me | null>(null);
+  const [accountStatus, setAccountStatus] = useState<'loading' | 'unavailable' | 'guest' | 'signed-in'>('loading');
+  const [savedList, setSavedList] = useState<CustomAgent[]>([]);
+  const signedIn = accountStatus === 'signed-in';
+  const customAgents = signedIn ? savedList : localAgents;
+  const setCustomAgents = signedIn ? setSavedList : setLocalAgents;
+  const maxAgents = signedIn ? 200 : MAX_CUSTOM_AGENTS;
+
+  const refreshAccount = useCallback(async (): Promise<boolean> => {
+    try {
+      const [m, list] = await Promise.all([accountApi.me(), savedAgents.list()]);
+      setMe(m);
+      setSavedList(list.map(fromSaved));
+      setAccountStatus('signed-in');
+      return true;
+    } catch (err) {
+      setMe(null);
+      setSavedList([]);
+      setAccountStatus(err instanceof ApiError && err.status === 401 ? 'guest' : 'unavailable');
+      return false;
+    }
+  }, []);
+  useEffect(() => {
+    if (loading) return;
+    if (meta && !meta.features.auth) { setAccountStatus('unavailable'); return; }
+    void refreshAccount();
+  }, [loading, meta, refreshAccount]);
 
   // ---- selection, composer and dialogs
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -148,9 +185,9 @@ export default function App() {
       toast(`Add your topic after ${composer.workflow.command} first.`);
       return;
     }
-    void chat.send({ agent: activeAgent, customAgent: selectedCustom, workflow: composer.workflow, text });
+    void chat.send({ agent: activeAgent, customAgent: selectedCustom, workflow: composer.workflow, text, persist: signedIn, savedAgentId: signedIn ? selectedCustom?.id : undefined });
     setComposer(EMPTY_COMPOSER);
-  }, [activeAgent, composer, selectedCustom, chat, toast]);
+  }, [activeAgent, composer, selectedCustom, chat, toast, signedIn]);
 
   const startWorkflow = useCallback((w: Workflow) => {
     if (!selectedKey) {
@@ -180,13 +217,29 @@ export default function App() {
   const openCreator = useCallback((editingId: string | null, draft: AgentDraft = EMPTY_DRAFT, warnings: string[] = []) => setCreator({ open: true, editingId, draft, warnings }), []);
   const closeCreator = useCallback(() => setCreator(c => ({ ...c, open: false })), []);
 
-  const saveAgent = (draft: AgentDraft) => {
+  const saveAgent = async (draft: AgentDraft) => {
     const now = Date.now();
+    if (signedIn) {
+      try {
+        if (creator.editingId) {
+          const saved = fromSaved(await savedAgents.update(creator.editingId, draft));
+          setSavedList(list => list.map(a => (a.id === saved.id ? saved : a)));
+          toast(`Saved ${draft.name} (version ${saved.version})`, 'success');
+        } else {
+          const saved = fromSaved(await savedAgents.create(draft));
+          setSavedList(list => [...list, saved]);
+          toast(`Created ${draft.name} in ${me?.workspace?.name ?? 'your workspace'}`, 'success');
+          selectAgent(`custom:${saved.id}`);
+        }
+        closeCreator();
+      } catch (err) { toast(`Could not save: ${failure(err)}`, 'error'); }
+      return;
+    }
     if (creator.editingId) {
       setCustomAgents(list => list.map(a => (a.id === creator.editingId ? { ...a, ...draft, updatedAt: now } : a)));
       toast(`Saved ${draft.name}`, 'success');
     } else {
-      if (customAgents.length >= MAX_CUSTOM_AGENTS) { toast(`You can keep up to ${MAX_CUSTOM_AGENTS} custom agents. Delete one first.`, 'error'); return; }
+      if (customAgents.length >= maxAgents) { toast(`You can keep up to ${maxAgents} custom agents. Delete one first.`, 'error'); return; }
       const id = uid();
       setCustomAgents(list => [...list, { ...draft, id, createdAt: now, updatedAt: now }]);
       toast(`Created ${draft.name}`, 'success');
@@ -195,36 +248,99 @@ export default function App() {
     closeCreator();
   };
 
-  const removeCustomAgent = useCallback((id: string) => {
+  const removeCustomAgent = useCallback(async (id: string) => {
     const key = `custom:${id}`;
+    if (signedIn) {
+      try { await savedAgents.remove(id); } catch (err) { toast(`Could not delete: ${failure(err)}`, 'error'); return; }
+    }
     chat.clear(key);
     setCustomAgents(list => list.filter(a => a.id !== id));
     setSelectedKey(k => (k === key ? null : k));
     toast('Agent deleted');
-  }, [chat, toast]);
+  }, [chat, toast, signedIn, setCustomAgents]);
 
   const deleteAgent = () => {
     if (!creator.editingId) return;
-    removeCustomAgent(creator.editingId);
+    void removeCustomAgent(creator.editingId);
     closeCreator();
   };
 
-  const duplicateCustomAgent = useCallback((id: string) => {
+  const duplicateCustomAgent = useCallback(async (id: string) => {
     const a = customAgents.find(x => x.id === id);
     if (!a) return;
-    if (customAgents.length >= MAX_CUSTOM_AGENTS) { toast(`You can keep up to ${MAX_CUSTOM_AGENTS} custom agents. Delete one first.`, 'error'); return; }
+    if (customAgents.length >= maxAgents) { toast(`You can keep up to ${maxAgents} custom agents. Delete one first.`, 'error'); return; }
     const now = Date.now();
     const name = `${a.name.slice(0, 53)} (copy)`;
-    setCustomAgents(list => [...list, { ...draftOf(a), name, id: uid(), createdAt: now, updatedAt: now }]);
+    if (signedIn) {
+      try {
+        const saved = fromSaved(await savedAgents.create({ ...draftOf(a), name }));
+        setSavedList(list => [...list, saved]);
+      } catch (err) { toast(`Could not duplicate: ${failure(err)}`, 'error'); return; }
+    } else {
+      setLocalAgents(list => [...list, { ...draftOf(a), name, id: uid(), createdAt: now, updatedAt: now }]);
+    }
     toast(`Created ${name}`, 'success');
-  }, [customAgents, toast]);
+  }, [customAgents, toast, signedIn, maxAgents]);
 
+  /** Deletes the agents kept in this browser (never the workspace's saved agents). */
   const removeAllCustomAgents = useCallback(() => {
-    for (const a of customAgents) chat.clear(`custom:${a.id}`);
-    setSelectedKey(k => (k?.startsWith('custom:') ? null : k));
-    setCustomAgents([]);
-    toast('All custom agents deleted');
-  }, [customAgents, chat, toast]);
+    for (const a of localAgents) chat.clear(`custom:${a.id}`);
+    if (!signedIn) setSelectedKey(k => (k?.startsWith('custom:') ? null : k));
+    setLocalAgents([]);
+    toast(signedIn ? 'Deleted the agents stored in this browser' : 'All custom agents deleted');
+  }, [localAgents, chat, toast, signedIn]);
+
+  const importLocalAgents = useCallback(async () => {
+    if (!signedIn || !localAgents.length) return;
+    try {
+      const created = await savedAgents.importMany(localAgents.map(draftOf));
+      setSavedList(list => [...list, ...created.map(fromSaved)]);
+      setLocalAgents([]);
+      toast(`Moved ${created.length} agent${created.length === 1 ? '' : 's'} into ${me?.workspace?.name ?? 'your workspace'}`, 'success');
+    } catch (err) { toast(`Could not move the agents: ${failure(err)}`, 'error'); }
+  }, [signedIn, localAgents, me, toast]);
+
+  const setAgentVisibility = useCallback(async (id: string, visibility: 'PRIVATE' | 'WORKSPACE') => {
+    try {
+      const saved = fromSaved(await savedAgents.update(id, { visibility }));
+      setSavedList(list => list.map(a => (a.id === id ? saved : a)));
+      toast(visibility === 'PRIVATE' ? 'Only you can see this agent now' : 'Shared with your workspace', 'success');
+    } catch (err) { toast(`Could not change sharing: ${failure(err)}`, 'error'); }
+  }, [toast]);
+
+  // ---- account actions: every change of who/where you are starts clean, so nothing leaks between accounts
+  const startFresh = useCallback(() => { chat.reset(); setSelectedKey(null); setComposer(EMPTY_COMPOSER); }, [chat]);
+  const onSignedIn = useCallback(async () => {
+    startFresh();
+    if (await refreshAccount()) { toast('Signed in', 'success'); navigate('command-center'); }
+    else toast('Could not load your account. Please try again.', 'error');
+  }, [startFresh, refreshAccount, toast, navigate]);
+  const signOut = useCallback(async () => {
+    try { await authApi.signOut(); } catch (err) { toast(`Could not sign out: ${failure(err)}`, 'error'); return; }
+    startFresh();
+    setMe(null); setSavedList([]); setAccountStatus('guest');
+    toast('Signed out');
+  }, [startFresh, toast]);
+  const switchWorkspace = useCallback(async (id: string) => {
+    try {
+      const ws = await accountApi.activateWorkspace(id);
+      startFresh();
+      await refreshAccount();
+      toast(`Switched to ${ws.name}`, 'success');
+    } catch (err) { toast(`Could not switch: ${failure(err)}`, 'error'); }
+  }, [startFresh, refreshAccount, toast]);
+  const createWorkspace = useCallback(async (name: string) => {
+    const ws = await accountApi.createWorkspace(name); // errors surface in the dialog
+    startFresh();
+    await refreshAccount();
+    toast(`Created ${ws.name}`, 'success');
+  }, [startFresh, refreshAccount, toast]);
+
+  // Signed in: opening an agent brings back your latest saved conversation with it.
+  const restore = chat.restore;
+  useEffect(() => {
+    if (signedIn && onChatPage && selectedKey) void restore(selectedKey, conversations.latest);
+  }, [signedIn, onChatPage, selectedKey, restore]);
 
   const importInput = useRef<HTMLInputElement>(null);
   const importTarget = useRef<string | null>(null);
@@ -242,7 +358,9 @@ export default function App() {
   // ---- shared workspace API for the pages and the shell
   const ws = useMemo<WorkspaceApi>(() => ({
     agents, workflows, mode, meta, loading, loadError, reload: () => void load(),
-    customAgents, maxCustomAgents: MAX_CUSTOM_AGENTS, duplicateCustomAgent, removeCustomAgent, removeAllCustomAgents,
+    account: { status: accountStatus, me, signOut, switchWorkspace, createWorkspace },
+    customAgents, maxCustomAgents: maxAgents, localAgentsToImport: signedIn ? localAgents : [], importLocalAgents, setAgentVisibility,
+    duplicateCustomAgent: id => void duplicateCustomAgent(id), removeCustomAgent: id => void removeCustomAgent(id), removeAllCustomAgents,
     chat, selectAgent, startWorkflow, openCreator,
     editCustomAgent: id => { const a = customAgents.find(x => x.id === id); if (a) openCreator(id, draftOf(a)); },
     exportCustomAgent: id => { const a = customAgents.find(x => x.id === id); if (a) setExportDraft(draftOf(a)); },
@@ -250,7 +368,8 @@ export default function App() {
     theme, setTheme, fxPref: fx.pref, setFxPref: (p: FxPref) => fx.setPref(p),
     navigate,
     openPalette: () => setPaletteOpen(true), openShortcuts: () => setShortcutsOpen(true), openDocs: () => setDocsOpen(true)
-  }), [agents, workflows, mode, meta, loading, loadError, load, customAgents, duplicateCustomAgent, removeCustomAgent, removeAllCustomAgents,
+  }), [agents, workflows, mode, meta, loading, loadError, load, accountStatus, me, signOut, switchWorkspace, createWorkspace,
+    customAgents, maxAgents, signedIn, localAgents, importLocalAgents, setAgentVisibility, duplicateCustomAgent, removeCustomAgent, removeAllCustomAgents,
     chat, selectAgent, startWorkflow, openCreator, triggerImport, theme, fx, navigate]);
 
   // ---- command palette
@@ -291,11 +410,14 @@ export default function App() {
     const nextFx: FxPref = fx.pref === 'auto' ? 'low' : fx.pref === 'low' ? 'off' : 'auto';
     const fxName = { auto: 'full (automatic)', low: 'lite', off: 'off' } as const;
     list.push({ id: 'fx', group: 'Appearance', label: `Visual effects: ${fxName[fx.pref]} — switch to ${fxName[nextFx]}`, keywords: 'effects animation 3d cursor performance motion reduce lite', icon: <Sparkles size={15} />, run: () => { fx.setPref(nextFx); toast(`Visual effects: ${fxName[nextFx]}`); } });
+    if (accountStatus === 'guest') list.push({ id: 'sign-in', group: 'Account', label: 'Sign in', keywords: 'login log in account', icon: <LogIn size={15} />, run: () => goAuth('sign-in') });
+    if (accountStatus === 'guest') list.push({ id: 'sign-up', group: 'Account', label: 'Create an account', keywords: 'register sign up', icon: <LogIn size={15} />, run: () => goAuth('sign-up') });
+    if (signedIn) list.push({ id: 'sign-out', group: 'Account', label: 'Sign out', keywords: 'logout log out', icon: <LogOut size={15} />, run: () => void signOut() });
     list.push({ id: 'shortcuts', group: 'Help', label: 'Keyboard shortcuts', shortcut: '?', keywords: 'help keys cheatsheet', icon: <Keyboard size={15} />, run: () => setShortcutsOpen(true) });
     list.push({ id: 'docs', group: 'Help', label: 'Open documentation', keywords: 'help guide how to docs', icon: <BookOpen size={15} />, run: () => setDocsOpen(true) });
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, page, route.unknown, onChatPage, go, navigate, fx.pref, activeAgent, messages.length, workflows, customAgents, agents, theme, newChat, copyChat, downloadChat, startWorkflow, selectAgent, openCreator, triggerImport]);
+  }, [accountStatus, signedIn, signOut, view, page, route.unknown, onChatPage, go, navigate, fx.pref, activeAgent, messages.length, workflows, customAgents, agents, theme, newChat, copyChat, downloadChat, startWorkflow, selectAgent, openCreator, triggerImport]);
 
   // ---- global keyboard shortcuts
   const anyModalOpen = paletteOpen || shortcutsOpen || docsOpen || creator.open || !!exportDraft;
@@ -323,11 +445,13 @@ export default function App() {
 
   // Name each page in the tab title, so history and screen readers say where you are.
   useEffect(() => {
-    document.title = view === 'landing' ? 'AgentVerse | AI Agent Platform' : `${route.unknown ? 'Not found' : navItem(page).label} · AgentVerse`;
-  }, [view, page, route.unknown]);
+    document.title = view === 'landing' ? 'AgentVerse | AI Agent Platform'
+      : view === 'auth' ? `${{ 'sign-in': 'Sign in', 'sign-up': 'Create account', 'forgot-password': 'Reset password', 'reset-password': 'New password', verified: 'Email confirmed' }[route.authPage ?? 'sign-in']} · AgentVerse`
+      : `${route.unknown ? 'Not found' : navItem(page).label} · AgentVerse`;
+  }, [view, page, route.unknown, route.authPage]);
 
   // The landing page is always dark; the workspace follows the theme. The swarm only shows on dark surfaces.
-  const darkSurface = view === 'landing' || theme === 'dark';
+  const darkSurface = view !== 'app' || theme === 'dark';
   const openBuilder = useCallback((draft?: AgentDraft) => { go('app'); openCreator(null, draft ?? EMPTY_DRAFT); }, [go, openCreator]);
 
   const renderPage = () => {
@@ -359,11 +483,17 @@ export default function App() {
   return (
     <WorkspaceContext.Provider value={ws}>
       <div className="relative min-h-dvh">
-        {darkSurface && <FxBackground view={view} />}
+        {darkSurface && <FxBackground view={view === 'landing' ? 'landing' : 'app'} />}
         {darkSurface && <div aria-hidden className="grain" />}
         <CustomCursor />
 
-        {view === 'landing' ? (
+        {view === 'auth' ? (
+          <div className="dark text-fg">
+            <Suspense fallback={<div className="flex min-h-dvh items-center justify-center"><Spinner label="Loading" size={20} /></div>}>
+              <AuthPage page={route.authPage ?? 'sign-in'} params={route.params ?? {}} meta={meta} onSignedIn={onSignedIn} />
+            </Suspense>
+          </div>
+        ) : view === 'landing' ? (
           <LandingPage
             agents={agents} workflows={workflows} mode={mode}
             onLaunch={() => go('app')} onOpenAgent={selectAgent} onRunWorkflow={startWorkflow}

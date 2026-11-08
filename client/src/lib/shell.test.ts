@@ -20,6 +20,12 @@ describe('parseRoute', () => {
     expect(parseRoute('#/app/nope')).toEqual({ view: 'app', page: 'chat', unknown: true });
   });
 
+  it('parses auth screens with their hash query', () => {
+    expect(parseRoute('#/auth/sign-in')).toMatchObject({ view: 'auth', authPage: 'sign-in', unknown: false });
+    expect(parseRoute('#/auth/verified?error=INVALID_TOKEN')).toMatchObject({ view: 'auth', authPage: 'verified', params: { error: 'INVALID_TOKEN' } });
+    expect(parseRoute('#/auth/nope')).toMatchObject({ view: 'auth', unknown: true });
+  });
+
   it('chat stays at plain #/app', () => {
     expect(pageHref('chat')).toBe('#/app');
     expect(pageHref('settings')).toBe('#/app/settings');

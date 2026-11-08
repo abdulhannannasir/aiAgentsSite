@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Keyboard, Trash2 } from 'lucide-react';
 import { Modal } from '../components/Modal';
-import { Button } from '../components/ui/Button';
+import { Button, LinkButton } from '../components/ui/Button';
+import { authHref } from '../lib/route';
 import { Badge, Card, CardTitle, PageHeader } from '../components/ui/Display';
 import { Segmented } from '../components/ui/Form';
 import { SERVICE_LABEL, type ServiceKey } from '../app/nav';
@@ -13,6 +14,7 @@ export default function SettingsPage() {
   const ws = useWorkspace();
   const [confirmWipe, setConfirmWipe] = useState(false);
   const meta = ws.meta;
+  const localCount = ws.account.status === 'signed-in' ? ws.localAgentsToImport.length : ws.customAgents.length;
 
   return (
     <div className="max-w-3xl">
@@ -79,22 +81,44 @@ export default function SettingsPage() {
 
         <Card as="section" aria-labelledby="set-account">
           <CardTitle id="set-account">Account</CardTitle>
-          <p className="text-sm">You are using AgentVerse as a <strong>guest</strong>. Your custom agents are saved in this browser; conversations last until you refresh the page.</p>
-          <p className="mt-1 text-xs text-muted">{meta?.features.auth ? 'This server is ready for accounts; sign-in screens arrive with Phase 2.' : 'Accounts need a database and an auth secret on the server (Phase 2).'}</p>
+          {ws.account.status === 'signed-in' && ws.account.me ? (
+            <div className="flex flex-col gap-3" data-testid="settings-account">
+              <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                <div><dt className="text-xs text-muted">Name</dt><dd>{ws.account.me.user.name}</dd></div>
+                <div><dt className="text-xs text-muted">Email</dt><dd className="flex items-center gap-2">{ws.account.me.user.email} <Badge tone={ws.account.me.user.emailVerified ? 'success' : 'warning'}>{ws.account.me.user.emailVerified ? 'Verified' : 'Not verified'}</Badge></dd></div>
+                <div><dt className="text-xs text-muted">Workspace</dt><dd>{ws.account.me.workspace?.name} <span className="capitalize text-muted">({ws.account.me.workspace?.role})</span></dd></div>
+                <div><dt className="text-xs text-muted">Workspaces</dt><dd>{ws.account.me.workspaces.length}</dd></div>
+              </dl>
+              <div><Button size="sm" onClick={() => void ws.account.signOut()}>Sign out</Button></div>
+            </div>
+          ) : ws.account.status === 'guest' ? (
+            <>
+              <p className="text-sm">You are using AgentVerse as a <strong>guest</strong>: custom agents stay in this browser and chats end when you refresh. Sign in to save them in a workspace.</p>
+              <div className="mt-3 flex gap-2">
+                <LinkButton href={authHref('sign-in')} size="sm" variant="primary">Sign in</LinkButton>
+                <LinkButton href={authHref('sign-up')} size="sm">Create an account</LinkButton>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm">You are using AgentVerse as a <strong>guest</strong>. Your custom agents are saved in this browser; conversations last until you refresh the page.</p>
+              <p className="mt-1 text-xs text-muted">Accounts need a database and an auth secret on the server (<code>DATABASE_URL</code>, <code>BETTER_AUTH_SECRET</code>).</p>
+            </>
+          )}
         </Card>
 
         <Card as="section" aria-labelledby="set-data">
           <CardTitle id="set-data">Data in this browser</CardTitle>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm">{ws.customAgents.length} custom agent{ws.customAgents.length === 1 ? '' : 's'} saved locally.</p>
-            <Button size="sm" variant="danger" icon={<Trash2 size={14} aria-hidden />} disabled={!ws.customAgents.length} onClick={() => setConfirmWipe(true)}>Delete all custom agents</Button>
+            <p className="text-sm">{localCount} custom agent{localCount === 1 ? '' : 's'} stored in this browser{ws.account.status === 'signed-in' ? ' (not in your workspace)' : ''}.</p>
+            <Button size="sm" variant="danger" icon={<Trash2 size={14} aria-hidden />} disabled={!localCount} onClick={() => setConfirmWipe(true)}>Delete agents in this browser</Button>
           </div>
         </Card>
       </div>
 
-      <Modal open={confirmWipe} onClose={() => setConfirmWipe(false)} title="Delete all custom agents?" size="sm">
+      <Modal open={confirmWipe} onClose={() => setConfirmWipe(false)} title="Delete the agents in this browser?" size="sm">
         <div className="p-5">
-          <p className="text-sm text-muted">This removes all {ws.customAgents.length} of your agents and their conversations from this browser. It cannot be undone; export any you want to keep first.</p>
+          <p className="text-sm text-muted">This removes all {localCount} agents stored in this browser and their conversations. It cannot be undone; export any you want to keep first.</p>
           <div className="mt-5 flex justify-end gap-2">
             <Button onClick={() => setConfirmWipe(false)}>Cancel</Button>
             <Button variant="danger" onClick={() => { ws.removeAllCustomAgents(); setConfirmWipe(false); }}>Delete all</Button>

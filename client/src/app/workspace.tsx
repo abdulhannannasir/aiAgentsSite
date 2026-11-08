@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react';
 import type { MetaResponse } from '../../../server/src/contracts';
 import type { useChat } from '../hooks/useChat';
+import type { Me } from '../lib/account';
 import type { FxPref } from '../lib/fx/capability';
 import type { PageId } from '../lib/route';
 import type { Agent, AgentDraft, CustomAgent, Theme, Workflow } from '../types';
@@ -16,8 +17,22 @@ export interface WorkspaceApi {
   loadError: boolean;
   reload: () => void;
 
+  /** Accounts: 'unavailable' when the server has no database/auth configured. */
+  account: {
+    status: 'loading' | 'unavailable' | 'guest' | 'signed-in';
+    me: Me | null;
+    signOut: () => Promise<void>;
+    switchWorkspace: (id: string) => Promise<void>;
+    createWorkspace: (name: string) => Promise<void>;
+  };
+
+  /** Guests: agents in this browser. Signed in: agents saved in the active workspace. */
   customAgents: CustomAgent[];
   maxCustomAgents: number;
+  /** Signed in: agents still sitting in this browser from guest use, which can be moved into the workspace. */
+  localAgentsToImport: CustomAgent[];
+  importLocalAgents: () => Promise<void>;
+  setAgentVisibility: (id: string, visibility: 'PRIVATE' | 'WORKSPACE') => Promise<void>;
   duplicateCustomAgent: (id: string) => void;
   removeCustomAgent: (id: string) => void;
   removeAllCustomAgents: () => void;

@@ -14,6 +14,10 @@ export interface SendOptions {
   customAgent?: CustomAgent;
   workflow?: Workflow | null;
   text: string;
+  /** Signed in: the agent is saved in the workspace, so the server loads it by id. */
+  savedAgentId?: string;
+  /** Signed in: the server saves the conversation (and keeps the history) instead of trusting the browser's copy. */
+  persist?: boolean;
 }
 
 /**
@@ -26,6 +30,9 @@ export function useChat() {
   threadsRef.current = threads;
   const controllers = useRef(new Map<string, AbortController>());
   const [streamingKeys, setStreamingKeys] = useState<string[]>([]);
+  // Signed-in threads: which saved conversation each thread continues.
+  const conversationIds = useRef(new Map<string, string>());
+  const restored = useRef(new Set<string>());
 
   const setStreaming = (key: string, on: boolean) => setStreamingKeys(keys => (on ? (keys.includes(key) ? keys : [...keys, key]) : keys.filter(k => k !== key)));
 
@@ -33,7 +40,7 @@ export function useChat() {
     setThreads(t => ({ ...t, [key]: (t[key] ?? []).map(m => (m.id === id ? fn(m) : m)) }));
   }, []);
 
-  const send = useCallback(async ({ agent, customAgent, workflow, text }: SendOptions) => {
+  const send = useCallback(async ({ agent, customAgent, workflow, text, savedAgentId, persist }: SendOptions) => {
     const key = agent.key;
     if (controllers.current.has(key)) return;
 
@@ -59,12 +66,22 @@ export function useChat() {
 
     const request: ChatRequest = { message: text, history };
     if (workflow) request.workflowId = workflow.id;
+    else if (savedAgentId) request.customAgentId = savedAgentId;
     else if (customAgent) request.agent = { name: customAgent.name, description: customAgent.description, systemPrompt: customAgent.systemPrompt, temperature: customAgent.temperature, tools: customAgent.tools };
     else request.agentId = agent.key;
+    if (persist) {
+      request.threadKey = key;
+      const conv = conversationIds.current.get(key);
+      if (conv) request.conversationId = conv;
+      restored.current.add(key); // a thread you are typing in is never overwritten by a restore
+    }
 
     let serverError: string | null = null;
     const onEvent = (e: ServerEvent) => {
       switch (e.type) {
+        case 'conversation':
+          conversationIds.current.set(key, e.id);
+          break;
         case 'plan':
           patchReply(key, replyId, m => ({ ...m, trace: e.steps.map(s => ({ ...s, output: '' })) }));
           break;
@@ -124,10 +141,38 @@ export function useChat() {
 
   const stop = useCallback((key: string) => controllers.current.get(key)?.abort(), []);
 
+  /** Starts a fresh thread with this agent (a saved conversation stays saved; the next message starts a new one). */
   const clear = useCallback((key: string) => {
     controllers.current.get(key)?.abort();
+    conversationIds.current.delete(key);
+    restored.current.add(key);
     setThreads(t => ({ ...t, [key]: [] }));
   }, []);
 
-  return { threads, streamingKeys, send, stop, clear };
+  /** Forgets every thread (sign-in, sign-out, switching workspace), so no data crosses accounts. */
+  const reset = useCallback(() => {
+    for (const c of controllers.current.values()) c.abort();
+    conversationIds.current.clear();
+    restored.current.clear();
+    setThreads({});
+  }, []);
+
+  /**
+   * Signed in: loads the newest saved conversation with this agent into an empty thread, once per thread.
+   * `load` is injected so this hook stays free of account code.
+   */
+  const restore = useCallback(async (key: string, load: (key: string) => Promise<{ id: string; messages: Message[] } | null>) => {
+    if (restored.current.has(key) || (threadsRef.current[key]?.length ?? 0) > 0) return;
+    restored.current.add(key);
+    try {
+      const saved = await load(key);
+      if (!saved || (threadsRef.current[key]?.length ?? 0) > 0) return;
+      conversationIds.current.set(key, saved.id);
+      setThreads(t => ({ ...t, [key]: saved.messages }));
+    } catch {
+      restored.current.delete(key); // try again next time the agent is opened
+    }
+  }, []);
+
+  return { threads, streamingKeys, send, stop, clear, reset, restore };
 }

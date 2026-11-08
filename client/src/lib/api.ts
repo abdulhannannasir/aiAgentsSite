@@ -34,12 +34,17 @@ export interface ChatRequest {
   agentId?: string;
   agent?: Pick<AgentDraft, 'name' | 'description' | 'systemPrompt' | 'temperature' | 'tools'>;
   workflowId?: string;
+  /** Signed in only: a saved agent, the saved conversation to continue, and the thread it belongs to. */
+  customAgentId?: string;
+  conversationId?: string;
+  threadKey?: string;
 }
 
 /** POSTs a chat message and reports each streamed server event. Throws ApiError for non-2xx responses. */
 export async function streamChat(request: ChatRequest, signal: AbortSignal, onEvent: (event: ServerEvent) => void): Promise<void> {
   const res = await fetch('/api/v1/chat', {
     method: 'POST',
+    credentials: 'same-origin',
     signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(request)

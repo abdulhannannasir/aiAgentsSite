@@ -1,10 +1,15 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type FormEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
 import {
-  Bell, BookOpen, ChevronsLeft, ChevronsRight, Keyboard, LogIn, Menu as MenuIcon, Moon, Plus, Search, Settings, Sun, UserRound
+  Bell, BookOpen, Check, ChevronsLeft, ChevronsRight, ChevronsUpDown, Keyboard, LogIn, LogOut, Menu as MenuIcon, Moon, Plus, Search, Settings, Sun, UserPlus, UserRound
 } from 'lucide-react';
+import { Modal } from '../components/Modal';
+import { Button } from '../components/ui/Button';
+import { Field, Input } from '../components/ui/Form';
+import { goAuth } from '../lib/route';
 import { Magnetic } from '../components/fx/Magnetic';
 import { IconButton } from '../components/ui/Button';
+
 import { Badge } from '../components/ui/Display';
 import { Drawer, Menu, Popover } from '../components/ui/Overlay';
 import { MOD } from '../lib/platform';
@@ -63,8 +68,74 @@ function NavList({ page, collapsed, onNavigate }: { page: PageId; collapsed: boo
   );
 }
 
-/** Which workspace you are in. Until accounts exist (Phase 2) this is the browser-local guest space, shown as a label, not a fake switcher. */
+function NewWorkspaceDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const ws = useWorkspace();
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) { setError('Give the workspace a name.'); return; }
+    setBusy(true); setError(null);
+    try { await ws.account.createWorkspace(name.trim()); setName(''); onClose(); }
+    catch (err) { setError(err instanceof Error ? err.message : 'Could not create the workspace.'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="New workspace" description="A separate space with its own agents and chats. You'll be its owner." size="sm">
+      <form onSubmit={submit} className="flex flex-col gap-4 p-5">
+        <Field label="Workspace name" error={error ?? undefined}>{p => <Input {...p} maxLength={80} value={name} onChange={e => setName(e.target.value)} data-autofocus placeholder="e.g. Acme Legal" />}</Field>
+        <div className="flex justify-end gap-2">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" disabled={busy}>{busy ? 'Creating…' : 'Create workspace'}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+const initial = (name: string) => (name.trim()[0] ?? 'W').toUpperCase();
+
+/**
+ * Which workspace you are in. Signed in: a real switcher (your memberships, plus "New workspace").
+ * Guest: a plain label for the browser-local space — not a fake switcher.
+ */
 function WorkspaceLabel({ collapsed }: { collapsed: boolean }) {
+  const { account } = useWorkspace();
+  const [creating, setCreating] = useState(false);
+  const me = account.me;
+  if (account.status === 'signed-in' && me?.workspace) {
+    const current = me.workspace;
+    return (
+      <>
+        <Menu
+          label={`Workspace: ${current.name}. Switch workspace`}
+          align="left"
+          triggerClassName={clsx('flex w-full items-center gap-2.5 rounded-xl border border-line text-left transition hover:bg-hover', collapsed ? 'h-10 w-10 justify-center' : 'px-2.5 py-2')}
+          trigger={collapsed ? <span className="font-display text-sm font-bold">{initial(current.name)}</span> : (
+            <>
+              <span aria-hidden className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-neon-cyan/30 to-neon-violet/30 font-display text-sm font-bold">{initial(current.name)}</span>
+              <span className="min-w-0 flex-1" data-testid="workspace-label">
+                <span className="block truncate text-sm font-semibold">{current.name}</span>
+                <span className="block truncate text-[11px] capitalize text-muted">{current.role}</span>
+              </span>
+              <ChevronsUpDown size={14} aria-hidden className="shrink-0 text-muted" />
+            </>
+          )}
+          header={<p className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">Your workspaces</p>}
+          items={[
+            ...me.workspaces.map(w => ({
+              id: w.id, label: w.name, hint: w.role,
+              icon: w.id === current.id ? <Check size={15} className="text-accent" /> : <span className="inline-block w-[15px]" />,
+              onSelect: w.id === current.id ? undefined : () => void account.switchWorkspace(w.id)
+            })),
+            { id: 'new', label: 'New workspace…', icon: <Plus size={15} />, onSelect: () => setCreating(true) }
+          ]}
+        />
+        <NewWorkspaceDialog open={creating} onClose={() => setCreating(false)} />
+      </>
+    );
+  }
   if (collapsed) {
     return <div title="Guest workspace — saved in this browser" className="mx-auto flex h-9 w-9 items-center justify-center rounded-lg border border-line bg-hover font-display text-sm font-bold">G</div>;
   }
@@ -119,21 +190,35 @@ function Notifications() {
 
 function AccountMenu() {
   const ws = useWorkspace();
-  const authReady = !!ws.meta?.features.auth;
+  const { status, me } = ws.account;
+  const common = [
+    { id: 'settings', label: 'Settings', icon: <Settings size={15} />, onSelect: () => ws.navigate('settings') },
+    { id: 'theme', label: ws.theme === 'dark' ? 'Light theme' : 'Dark theme', icon: ws.theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />, onSelect: () => ws.setTheme(ws.theme === 'dark' ? 'light' : 'dark') },
+    { id: 'shortcuts', label: 'Keyboard shortcuts', icon: <Keyboard size={15} />, onSelect: ws.openShortcuts },
+    { id: 'docs', label: 'Documentation', icon: <BookOpen size={15} />, onSelect: ws.openDocs }
+  ];
+  if (status === 'signed-in' && me) {
+    return (
+      <Menu
+        label="Account menu"
+        trigger={<span aria-hidden className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-neon-cyan to-neon-violet font-display text-xs font-bold text-on-accent">{initial(me.user.name)}</span>}
+        header={<><p className="truncate text-sm font-semibold" data-testid="account-name">{me.user.name}</p><p className="truncate text-xs text-muted">{me.user.email}</p></>}
+        items={[...common, { id: 'sign-out', label: 'Sign out', icon: <LogOut size={15} />, onSelect: () => void ws.account.signOut() }]}
+      />
+    );
+  }
+  const available = status === 'guest';
   return (
     <Menu
       label="Account menu"
       trigger={<UserRound size={18} aria-hidden />}
       header={<><p className="text-sm font-semibold">Guest</p><p className="text-xs text-muted">Not signed in · data stays in this browser</p></>}
       items={[
-        { id: 'settings', label: 'Settings', icon: <Settings size={15} />, onSelect: () => ws.navigate('settings') },
-        { id: 'theme', label: ws.theme === 'dark' ? 'Light theme' : 'Dark theme', icon: ws.theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />, onSelect: () => ws.setTheme(ws.theme === 'dark' ? 'light' : 'dark') },
-        { id: 'shortcuts', label: 'Keyboard shortcuts', icon: <Keyboard size={15} />, onSelect: ws.openShortcuts },
-        { id: 'docs', label: 'Documentation', icon: <BookOpen size={15} />, onSelect: ws.openDocs },
-        {
-          id: 'sign-in', label: 'Sign in', icon: <LogIn size={15} />, disabled: true,
-          hint: authReady ? 'Sign-in screens arrive in Phase 2' : 'Accounts are not enabled on this server yet'
-        }
+        available
+          ? { id: 'sign-in', label: 'Sign in', icon: <LogIn size={15} />, onSelect: () => goAuth('sign-in') }
+          : { id: 'sign-in', label: 'Sign in', icon: <LogIn size={15} />, disabled: true, hint: status === 'loading' ? 'Checking…' : 'Accounts are not enabled on this server' },
+        ...(available ? [{ id: 'sign-up', label: 'Create an account', icon: <UserPlus size={15} />, onSelect: () => goAuth('sign-up') }] : []),
+        ...common
       ]}
     />
   );

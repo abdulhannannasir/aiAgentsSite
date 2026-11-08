@@ -35,9 +35,9 @@ function CustomAgentCard({ agent, selected, active, onSelect, onEdit, onExport, 
         {active && <StatusChip status="active" />}
       </button>
       <div className="mt-2 flex flex-wrap gap-1 border-t border-line pt-2">
-        <button type="button" onClick={onEdit} className={btn} aria-label={`Edit ${agent.name}`}><Pencil size={12} aria-hidden /> Edit</button>
+        {agent.canEdit !== false && <button type="button" onClick={onEdit} className={btn} aria-label={`Edit ${agent.name}`}><Pencil size={12} aria-hidden /> Edit</button>}
         <button type="button" onClick={onExport} className={btn} aria-label={`Export ${agent.name} as JSON`}><FileJson size={12} aria-hidden /> Export</button>
-        <button type="button" onClick={onImportInto} className={btn} aria-label={`Import a JSON file into ${agent.name}`}><Upload size={12} aria-hidden /> Import</button>
+        {agent.canEdit !== false && <button type="button" onClick={onImportInto} className={btn} aria-label={`Import a JSON file into ${agent.name}`}><Upload size={12} aria-hidden /> Import</button>}
       </div>
     </div>
   );

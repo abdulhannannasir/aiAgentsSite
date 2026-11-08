@@ -7,6 +7,25 @@
 - **Demo mode** (default): works instantly with no API key. Replies are canned text and simulated workflow steps.
 - **Live mode**: set `GEMINI_API_KEY` (Google Gemini) or `OPENAI_API_KEY` (OpenAI) and every agent answers with a real model, streamed token by token.
 
+## Accounts and workspaces (optional)
+
+Set `DATABASE_URL` (PostgreSQL) and `BETTER_AUTH_SECRET` and the app gains accounts; leave them out and it runs exactly as before, in guest mode.
+
+| Signed in | Guest |
+| --- | --- |
+| Email + password sign-up and sign-in, email verification, password reset (Better Auth, database sessions in httpOnly cookies) | No account |
+| A personal **workspace** on sign-up; create more and switch between them; roles owner / admin / member | One browser-local space |
+| Custom agents saved in the workspace, **versioned** on every edit, shared with the workspace or private; agents built as a guest can be moved in with one click | Custom agents in `localStorage` |
+| Chats saved on the server (history loaded from the database, not trusted from the browser) and restored when you reopen an agent; each reply records an execution and usage | Chats end on refresh |
+
+```bash
+createdb agentverse
+DATABASE_URL=postgresql://localhost/agentverse npm run db:migrate
+DATABASE_URL=postgresql://localhost/agentverse BETTER_AUTH_SECRET=$(openssl rand -base64 32) npm start
+```
+
+Without `SMTP_URL`, verification and reset emails are written to the server log in development (never in production). Data is isolated per workspace on the server; see `docs/DATABASE_DESIGN.md` and `docs/API_DESIGN.md`.
+
 ## The interface
 
 | Piece | What it is |
@@ -115,6 +134,7 @@ The navbar badge shows **Demo mode** or **Live AI**.
 
 ```bash
 npm test             # client unit tests + server tests (API, validation, SSE, providers against fake upstreams)
+TEST_DATABASE_URL=postgresql://localhost/agentverse_test npm test   # also runs the PostgreSQL integration tests
 npm run typecheck    # strict TypeScript, client and server
 ```
 
@@ -126,6 +146,8 @@ PORT=3801 node server.js &
 BASE_URL=http://127.0.0.1:3801 node e2e/features.mjs
 BASE_URL=http://127.0.0.1:3801 node e2e/visual.mjs      # SHOTS_DIR=/some/dir also saves screenshots
 BASE_URL=http://127.0.0.1:3801 node e2e/shell.mjs
+# accounts: a server with a database (see the header of e2e/accounts.mjs)
+BASE_URL=http://127.0.0.1:3802 SERVER_LOG=/tmp/agentverse-e2e.log node e2e/accounts.mjs
 ```
 
 ## Configuration
@@ -144,6 +166,11 @@ BASE_URL=http://127.0.0.1:3801 node e2e/shell.mjs
 | `CORS_ORIGINS` | _(empty)_ | Other sites allowed to call the API (comma-separated). Empty = same-origin only. |
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `20` / `60000` | Chat requests per IP per window. |
 | `LOG_LEVEL` | `info` | pino log level (logs are JSON, secrets redacted). |
+| `DATABASE_URL` | _(empty)_ | PostgreSQL. Enables accounts, workspaces and saved data (with `BETTER_AUTH_SECRET`). |
+| `BETTER_AUTH_SECRET` | _(empty)_ | 32+ random characters for sessions. |
+| `BETTER_AUTH_URL` | `http://localhost:$PORT` | Public URL of the app (email links, trusted origin). |
+| `SMTP_URL` / `MAIL_FROM` | _(empty)_ | Email delivery for verification and password reset. |
+| `REQUIRE_EMAIL_VERIFICATION` | `true` if SMTP is set | Require a confirmed email before first sign-in. |
 
 With no key the app runs in demo mode. If both keys are set it uses OpenAI unless `LLM_PROVIDER=gemini`. A plain chat reply that fails before any text is sent (bad key, quota, blocked prompt) falls back to demo text; a **workflow step** that fails is reported as Failed instead. `/api/health` reports the active provider.
 
@@ -235,7 +262,7 @@ The image is multi-stage: the React app is built in one stage and only the serve
 
 ## Things to know before going public
 
-- **Conversations live in the browser tab.** Refreshing or closing the page ends them. Custom agents persist in this browser only.
+- **Guests' conversations live in the browser tab.** Refreshing ends them and custom agents persist in that browser only. With a database configured, signed-in users' agents and chats are saved on the server.
 - **Live mode costs money.** Anyone who can reach your site can spend your model credits, and a workflow makes several model calls. Use a hard limit at your host and a quota or spending cap with your model provider.
 - **Tools are not connected yet.** An agent's tools (`web_search`, `ticket_system`, `email_sender`, …) are permission labels; nothing is searched, sent or created. Demo replies say so instead of printing fake results. Real, permissioned tools arrive with the Phase 4 tool registry (see `docs/IMPLEMENTATION_ROADMAP.md`).
 - **Legal, finance and health agents** are chat templates, not professional advice.
