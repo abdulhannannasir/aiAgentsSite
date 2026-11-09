@@ -26,6 +26,8 @@ export interface Route {
   authPage?: AuthPageId;
   /** Query parameters inside the hash (e.g. #/auth/verified?error=…). */
   params?: Record<string, string>;
+  /** #/app/agent/<id>: the agent detail page (shown under Discover). */
+  agentId?: string;
 }
 
 const isPage = (s: string): s is PageId => (PAGE_IDS as readonly string[]).includes(s);
@@ -38,8 +40,13 @@ export function parseRoute(hash: string): Route {
       ? { view: 'auth', page: 'chat', unknown: false, authPage: a[1] as AuthPageId, params }
       : { view: 'auth', page: 'chat', unknown: true, authPage: 'sign-in', params };
   }
+  const d = /^#\/app\/agent\/([a-z0-9-]{1,80})\/?$/.exec(hash);
+  if (d) return { view: 'app', page: 'discover', unknown: false, agentId: d[1] };
   const m = /^#\/app(?:\/([^/?#]*))?\/?(?:[?].*)?$/.exec(hash);
-  if (!m) return { view: 'landing', page: 'chat', unknown: false };
+  if (!m) {
+    // Anything else under #/app/ is a broken or old link inside the app: show "not found", not the landing page.
+    return hash.startsWith('#/app/') ? { view: 'app', page: 'chat', unknown: true } : { view: 'landing', page: 'chat', unknown: false };
+  }
   const segment = (m[1] ?? '').toLowerCase();
   if (!segment) return { view: 'app', page: 'chat', unknown: false };
   return isPage(segment) ? { view: 'app', page: segment, unknown: false } : { view: 'app', page: 'chat', unknown: true };
@@ -73,6 +80,7 @@ function setHash(target: string) {
 }
 
 export const authHref = (p: AuthPageId) => `#/auth/${p}`;
+export const agentHref = (id: string) => `#/app/agent/${encodeURIComponent(id)}`;
 export const goAuth = (p: AuthPageId) => setHash(authHref(p));
 
 export function useRoute(): [Route, (page: PageId) => void] {

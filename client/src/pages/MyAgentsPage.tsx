@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Copy, FileJson, Lock, MessagesSquare, Pencil, Plus, Trash2, Upload, Users } from 'lucide-react';
+import { Copy, FileJson, History, Lock, MessagesSquare, Pencil, Plus, Trash2, Upload, Users } from 'lucide-react';
+import { versions as fetchVersions } from '../lib/marketplace';
 import { AgentAvatar, CUSTOM_GRADIENT } from '../components/AgentAvatar';
 import { Modal } from '../components/Modal';
 import { Button } from '../components/ui/Button';
@@ -14,6 +15,12 @@ export default function MyAgentsPage() {
   const signedIn = ws.account.status === 'signed-in';
   const workspaceName = ws.account.me?.workspace?.name ?? 'your workspace';
   const [moving, setMoving] = useState(false);
+  const [history, setHistory] = useState<{ agent: CustomAgent; rows: Awaited<ReturnType<typeof fetchVersions>> | null; error?: string } | null>(null);
+  const openHistory = (agent: CustomAgent) => {
+    setHistory({ agent, rows: null });
+    fetchVersions(agent.id).then(rows => setHistory(h => (h?.agent.id === agent.id ? { agent, rows } : h)))
+      .catch(err => setHistory(h => (h?.agent.id === agent.id ? { agent, rows: [], error: err instanceof Error ? err.message : 'Could not load the history.' } : h)));
+  };
 
   return (
     <div>
@@ -65,6 +72,9 @@ export default function MyAgentsPage() {
                   {a.canEdit !== false && <Button size="sm" icon={<Pencil size={13} aria-hidden />} onClick={() => ws.editCustomAgent(a.id)} aria-label={`Edit ${a.name}`}>Edit</Button>}
                   <Button size="sm" icon={<Copy size={13} aria-hidden />} onClick={() => ws.duplicateCustomAgent(a.id)} disabled={full} aria-label={`Duplicate ${a.name}`}>Duplicate</Button>
                   <Button size="sm" variant="ghost" icon={<FileJson size={13} aria-hidden />} onClick={() => ws.exportCustomAgent(a.id)} aria-label={`Export ${a.name} as JSON`}>Export</Button>
+                  {signedIn && a.version !== undefined && (
+                    <Button size="sm" variant="ghost" icon={<History size={13} aria-hidden />} onClick={() => openHistory(a)} aria-label={`Version history of ${a.name}`}>History</Button>
+                  )}
                   {signedIn && a.canEdit && (
                     <Button size="sm" variant="ghost" icon={a.visibility === 'PRIVATE' ? <Users size={13} aria-hidden /> : <Lock size={13} aria-hidden />}
                       onClick={() => void ws.setAgentVisibility(a.id, a.visibility === 'PRIVATE' ? 'WORKSPACE' : 'PRIVATE')}
@@ -79,6 +89,21 @@ export default function MyAgentsPage() {
           })}
         </ul>
       )}
+
+      <Modal open={!!history} onClose={() => setHistory(null)} title={`Versions of ${history?.agent.name ?? ''}`} description="Every saved change is kept; each chat reply records the version that answered." size="sm">
+        <div className="p-5" data-testid="version-history">
+          {!history?.rows ? <p className="text-sm text-muted">Loading…</p> : history.error ? <p role="alert" className="text-sm text-rose-500">{history.error}</p> : (
+            <ol className="flex flex-col gap-2">
+              {history.rows.map((v, i) => (
+                <li key={v.id} className="flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-2 text-sm">
+                  <span><strong>v{v.version}</strong> · {v.name}{i === 0 && <Badge tone="accent" className="ml-2">Current</Badge>}</span>
+                  <span className="text-xs text-muted">{new Date(v.createdAt).toLocaleString()}{v.createdByName ? ` · ${v.createdByName}` : ''}</span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      </Modal>
 
       <Modal open={!!toDelete} onClose={() => setToDelete(null)} title={`Delete ${toDelete?.name ?? 'agent'}?`} size="sm">
         <div className="p-5">

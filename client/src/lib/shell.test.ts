@@ -26,6 +26,11 @@ describe('parseRoute', () => {
     expect(parseRoute('#/auth/nope')).toMatchObject({ view: 'auth', unknown: true });
   });
 
+  it('parses agent detail pages and rejects odd ids', () => {
+    expect(parseRoute('#/app/agent/coding-assistant')).toEqual({ view: 'app', page: 'discover', unknown: false, agentId: 'coding-assistant' });
+    expect(parseRoute('#/app/agent/../etc')).toMatchObject({ unknown: true });
+  });
+
   it('chat stays at plain #/app', () => {
     expect(pageHref('chat')).toBe('#/app');
     expect(pageHref('settings')).toBe('#/app/settings');

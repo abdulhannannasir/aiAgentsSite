@@ -104,13 +104,23 @@ check('discover category filter', (await page.locator('[data-discover-agent]').c
 await page.getByTestId('discover-search').fill('zzzzqq');
 check('discover no-match state offers to clear filters', await page.getByRole('button', { name: 'Clear filters' }).isVisible());
 await page.getByRole('button', { name: 'Clear filters' }).click();
-await page.getByRole('button', { name: 'Details for Full-Stack Coding Assistant' }).click();
-await page.getByTestId('agent-detail').waitFor();
-check('details drawer shows tools (labelled not connected) and the workflows that use the agent',
-  /not connected/.test(await page.getByTestId('agent-detail').textContent()) && /Code Review/.test(await page.getByTestId('agent-detail').textContent()));
-await shot(page, 's04-discover-detail');
-await page.keyboard.press('Escape');
-await page.getByRole('dialog').waitFor({ state: 'detached' }).catch(() => {});
+await page.getByRole('link', { name: 'Details for Full-Stack Coding Assistant' }).click();
+await page.getByTestId('agent-detail-page').waitFor();
+const detailText = await page.getByTestId('agent-detail-page').textContent();
+check('agent detail page: own URL, tools labelled not connected, workflows, example prompts',
+  page.url().endsWith('#/app/agent/coding-assistant') && /not connected/.test(detailText) && /Code Review/.test(detailText) && (await page.getByTestId('example-prompts').locator('button').count()) >= 2);
+check('agent detail page on a server without a database: no invented numbers, it says why', await page.getByTestId('stats-unavailable').isVisible() && (await page.getByTestId('agent-stats').count()) === 0);
+check('agent detail page sets the tab title to the agent', (await page.title()).startsWith('Full-Stack Coding Assistant'));
+await shot(page, 's04-agent-detail');
+await page.getByTestId('example-prompts').locator('button').first().click();
+await page.waitForSelector('h2:has-text("Full-Stack Coding Assistant")');
+check('an example prompt opens the chat with the prompt ready to send', /debounce/.test(await page.getByRole('combobox', { name: 'Message' }).inputValue()));
+await page.getByRole('combobox', { name: 'Message' }).fill('');
+await page.goto(`${BASE}/?fx=off#/app/agent/not-a-real-agent`, { waitUntil: 'domcontentloaded' });
+check('an unknown agent id shows a friendly not-found state', await page.getByText("This agent doesn't exist").waitFor({ timeout: 5000 }).then(() => true, () => false));
+await page.goto(`${BASE}/?fx=off#/app/discover`, { waitUntil: 'domcontentloaded' });
+await page.waitForSelector('[data-discover-agent]');
+check('without a database the usage/rating sorts are not offered', !(await page.getByTestId('discover-sort').textContent()).includes('Most used'));
 await page.getByRole('button', { name: 'Chat with Language Translator' }).click();
 await page.waitForSelector('h2:has-text("Language Translator")');
 check('"Chat" opens the chat on that agent', page.url().endsWith('#/app'));

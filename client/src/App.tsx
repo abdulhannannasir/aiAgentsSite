@@ -12,6 +12,7 @@ import { Spinner } from './components/ui/Display';
 import { useChat } from './hooks/useChat';
 import { ApiError, fetchAgents, fetchHealth, fetchMeta, fetchWorkflows } from './lib/api';
 import { account as accountApi, auth as authApi, conversations, savedAgents, type Me, type SavedAgent } from './lib/account';
+import { marketplace, type AgentStats } from './lib/marketplace';
 import { EMPTY_DRAFT, MAX_AGENT_FILE_BYTES, isStoredAgent, parseAgentFile } from './lib/agentFile';
 import { chatFileName, chatToMarkdown, copyToClipboard, downloadTextFile } from './lib/chatExport';
 import { MOD, isEditableTarget } from './lib/platform';
@@ -35,6 +36,7 @@ const BuilderPage = lazy(() => import('./pages/BuilderPage'));
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const PlannedPage = lazy(() => import('./pages/PlannedPage'));
+const AgentDetailPage = lazy(() => import('./pages/AgentDetailPage'));
 const AuthPage = lazy(() => import('./pages/AuthPage'));
 const NotFoundPage = lazy(() => import('./pages/PlannedPage').then(m => ({ default: m.NotFoundPage })));
 
@@ -336,6 +338,52 @@ export default function App() {
     toast(`Created ${ws.name}`, 'success');
   }, [startFresh, refreshAccount, toast]);
 
+  // ---- marketplace: real stats (needs a database) and favorites (signed in)
+  const [stats, setStats] = useState<Map<string, AgentStats> | null>(null);
+  const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  const hasDatabase = meta?.features.database ?? true; // unknown (older server): try, and accept a 503
+  const refreshStats = useCallback(() => {
+    if (!hasDatabase) { setStats(null); return; } // the server said there is nothing to ask for
+    marketplace.stats()
+      .then(list => {
+        setStats(new Map(list.map(x => [x.id, x])));
+        setFavorites(prev => {
+          const next = new Set([...prev].filter(k => k.startsWith('custom:')));
+          for (const x of list) if (x.favorite) next.add(x.id);
+          return next;
+        });
+      })
+      .catch(() => setStats(null)); // no database: show no numbers at all rather than made-up ones
+  }, [hasDatabase]);
+  useEffect(() => {
+    if (accountStatus === 'loading' || loading) return;
+    refreshStats();
+    if (accountStatus !== 'signed-in') setFavorites(new Set());
+    else fetch('/api/v1/marketplace/favorites', { credentials: 'same-origin' }).then(r => (r.ok ? r.json() : [])).then((keys: string[]) => setFavorites(new Set(keys))).catch(() => undefined);
+  }, [accountStatus, loading, me?.workspace?.id, refreshStats]);
+  const toggleFavorite = useCallback(async (key: string) => {
+    const on = !favorites.has(key);
+    setFavorites(prev => { const n = new Set(prev); if (on) n.add(key); else n.delete(key); return n; });
+    try { await marketplace.setFavorite(key, on); }
+    catch (err) {
+      setFavorites(prev => { const n = new Set(prev); if (on) n.delete(key); else n.add(key); return n; });
+      toast(`Could not update favorites: ${failure(err)}`, 'error');
+    }
+  }, [favorites, toast]);
+  // Usage numbers change when a reply finishes: refresh them then (only if the server has stats at all).
+  const wasStreaming = useRef(false);
+  useEffect(() => {
+    const now = chat.streamingKeys.length > 0;
+    if (wasStreaming.current && !now && stats) refreshStats();
+    wasStreaming.current = now;
+  }, [chat.streamingKeys.length, stats, refreshStats]);
+
+  const startChatWith = useCallback((key: string, text: string) => {
+    selectAgent(key);
+    setComposer({ value: text, workflow: null });
+    focusComposer(true);
+  }, [selectAgent, focusComposer]);
+
   // Signed in: opening an agent brings back your latest saved conversation with it.
   const restore = chat.restore;
   useEffect(() => {
@@ -361,7 +409,8 @@ export default function App() {
     account: { status: accountStatus, me, signOut, switchWorkspace, createWorkspace },
     customAgents, maxCustomAgents: maxAgents, localAgentsToImport: signedIn ? localAgents : [], importLocalAgents, setAgentVisibility,
     duplicateCustomAgent: id => void duplicateCustomAgent(id), removeCustomAgent: id => void removeCustomAgent(id), removeAllCustomAgents,
-    chat, selectAgent, startWorkflow, openCreator,
+    stats, refreshStats, favorites, toggleFavorite,
+    chat, selectAgent, startChatWith, startWorkflow, openCreator,
     editCustomAgent: id => { const a = customAgents.find(x => x.id === id); if (a) openCreator(id, draftOf(a)); },
     exportCustomAgent: id => { const a = customAgents.find(x => x.id === id); if (a) setExportDraft(draftOf(a)); },
     triggerImport,
@@ -370,6 +419,7 @@ export default function App() {
     openPalette: () => setPaletteOpen(true), openShortcuts: () => setShortcutsOpen(true), openDocs: () => setDocsOpen(true)
   }), [agents, workflows, mode, meta, loading, loadError, load, accountStatus, me, signOut, switchWorkspace, createWorkspace,
     customAgents, maxAgents, signedIn, localAgents, importLocalAgents, setAgentVisibility, duplicateCustomAgent, removeCustomAgent, removeAllCustomAgents,
+    stats, refreshStats, favorites, toggleFavorite, startChatWith,
     chat, selectAgent, startWorkflow, openCreator, triggerImport, theme, fx, navigate]);
 
   // ---- command palette
@@ -447,8 +497,8 @@ export default function App() {
   useEffect(() => {
     document.title = view === 'landing' ? 'AgentVerse | AI Agent Platform'
       : view === 'auth' ? `${{ 'sign-in': 'Sign in', 'sign-up': 'Create account', 'forgot-password': 'Reset password', 'reset-password': 'New password', verified: 'Email confirmed' }[route.authPage ?? 'sign-in']} · AgentVerse`
-      : `${route.unknown ? 'Not found' : navItem(page).label} · AgentVerse`;
-  }, [view, page, route.unknown, route.authPage]);
+      : `${route.unknown ? 'Not found' : route.agentId ? agents.find(a => a.id === route.agentId)?.name ?? 'Agent' : navItem(page).label} · AgentVerse`;
+  }, [view, page, route.unknown, route.authPage, route.agentId, agents]);
 
   // The landing page is always dark; the workspace follows the theme. The swarm only shows on dark surfaces.
   const darkSurface = view !== 'app' || theme === 'dark';
@@ -471,7 +521,7 @@ export default function App() {
           />
         );
       case 'command-center': return <CommandCenterPage />;
-      case 'discover': return <DiscoverPage />;
+      case 'discover': return route.agentId ? <AgentDetailPage key={route.agentId} agentId={route.agentId} /> : <DiscoverPage />;
       case 'my-agents': return <MyAgentsPage />;
       case 'builder': return <BuilderPage />;
       case 'workflows': return <WorkflowsPage />;

@@ -96,6 +96,21 @@ Security: state-changing requests that carry a session cookie must come from `BE
 the same host (403 otherwise); Better Auth applies the same origin check to `/api/auth/*` and rate-limits sign-in /
 sign-up (3 per 10 s per IP) and reset / verification emails (3 per minute), answering 429 with `X-Retry-After`.
 
+### Phase 3 (marketplace) — implemented
+
+`GET /api/v1/agents/:id` now also returns `examples` (example prompts) and `workflows` (ids of workflows using the agent).
+The marketplace needs a database; without one these answer 503 `FEATURE_UNAVAILABLE` (the client checks
+`/meta` first and does not call them).
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| GET | `/api/v1/marketplace/agents` | – | per built-in agent: `runsTotal`, `runs30d`, `successRate`, `rating`, `reviewCount` (+ `favorite` when signed in). Computed from recorded single-agent runs and reviews only. |
+| GET | `/api/v1/marketplace/agents/:id` | – | `stats`, latest 20 `reviews` (author shown as first name + last initial), and for signed-in users `me`: runs, `canReview`, own review, own recent conversations in the workspace |
+| PUT / DELETE | `/api/v1/marketplace/agents/:id/review` | ✓ | `{ rating: 1-5 integer, comment?: ≤1000 }`; one per user per agent; only after the user has run the agent (403 otherwise) |
+| GET | `/api/v1/marketplace/favorites` | ✓ | favorite agent keys |
+| PUT / DELETE | `/api/v1/marketplace/favorites/:key` | ✓ | `key` = built-in id or `custom:<id>` of a saved agent you can see (404 otherwise); idempotent |
+| GET | `/api/v1/custom-agents/:id/versions` | ✓ | (Phase 2) now shown in the UI as version history |
+
 ### Later phases (shape reserved)
 
 `/api/v1/executions` (list, get, cancel, events SSE) · `/api/v1/tools` · `/api/v1/orchestrations` ·

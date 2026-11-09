@@ -2,6 +2,7 @@ import { createContext, useContext } from 'react';
 import type { MetaResponse } from '../../../server/src/contracts';
 import type { useChat } from '../hooks/useChat';
 import type { Me } from '../lib/account';
+import type { AgentStats } from '../lib/marketplace';
 import type { FxPref } from '../lib/fx/capability';
 import type { PageId } from '../lib/route';
 import type { Agent, AgentDraft, CustomAgent, Theme, Workflow } from '../types';
@@ -37,8 +38,17 @@ export interface WorkspaceApi {
   removeCustomAgent: (id: string) => void;
   removeAllCustomAgents: () => void;
 
+  /** Real per-agent usage and ratings; null when the server has no database (then nothing is shown). */
+  stats: Map<string, AgentStats> | null;
+  refreshStats: () => void;
+  /** Signed in: favorite agent keys (built-in ids or "custom:<id>"). */
+  favorites: Set<string>;
+  toggleFavorite: (key: string) => Promise<void>;
+
   chat: ReturnType<typeof useChat>;
   selectAgent: (key: string) => void;
+  /** Opens the chat with an agent and puts `text` in the message box (e.g. an example prompt). */
+  startChatWith: (key: string, text: string) => void;
   startWorkflow: (w: Workflow) => void;
   openCreator: (editingId: string | null, draft?: AgentDraft, warnings?: string[]) => void;
   editCustomAgent: (id: string) => void;
