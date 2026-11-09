@@ -41,6 +41,8 @@ model User {
   notifications Notification[]
   usage         UsageRecord[]
   auditLogs     AuditLog[]
+  favorites     AgentFavorite[]
+  reviews       AgentReview[]
 
   @@map("users")
 }
@@ -202,6 +204,37 @@ model AgentVersion {
   @@map("agent_versions")
 }
 
+// ============================================================ marketplace (Phase 3)
+
+/// A user's starred agent. agentKey: a built-in agent id, or "custom:<agentId>" for a saved agent they can see.
+model AgentFavorite {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentKey  String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, agentKey])
+  @@map("agent_favorites")
+}
+
+/// A rating (1-5) and optional comment on a built-in agent. One per user per agent; only users who have run the
+/// agent may review it.
+model AgentReview {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentKey  String
+  rating    Int
+  comment   String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, agentKey])
+  @@index([agentKey, updatedAt(sort: Desc)])
+  @@map("agent_reviews")
+}
+
 // ============================================================ conversations and executions
 
 model Conversation {
@@ -299,6 +332,7 @@ model AgentExecution {
 
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([workspaceId, status])
+  @@index([agentKey, createdAt])
   @@map("agent_executions")
 }
 

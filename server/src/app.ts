@@ -10,6 +10,7 @@ import { attachAuth, originGuard } from './middleware/session.js';
 import { toNodeHandler } from 'better-auth/node';
 import { unavailable } from './lib/errors.js';
 import { customAgentsRouter } from './modules/agents/customAgents.js';
+import { marketplaceRouter } from './modules/agents/marketplace.js';
 import { conversationsRouter } from './modules/chat/conversations.js';
 import { accountRouter } from './modules/workspaces/routes.js';
 import { createPlatform, type Platform } from './platform.js';
@@ -76,6 +77,7 @@ export function createApp(cfg: AppConfig, opts: AppOptions = {}): AppContext {
   app.use('/api/v1', accountRouter(platform, log));
   app.use('/api/v1/custom-agents', customAgentsRouter(platform, log));
   app.use('/api/v1/conversations', conversationsRouter(platform, log));
+  app.use('/api/v1/marketplace', marketplaceRouter(platform, log));
   app.use('/api/v1', api);
   app.use('/api', api); // unversioned aliases, kept for existing clients
   app.use('/api', apiNotFound);

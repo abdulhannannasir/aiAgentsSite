@@ -23,6 +23,12 @@ export interface PublicAgent {
   useCase: string;
 }
 
+/** GET /api/v1/agents/:id adds example prompts and the ids of workflows the agent is part of. */
+export interface PublicAgentDetail extends PublicAgent {
+  examples: string[];
+  workflows: string[];
+}
+
 export interface PublicWorkflowStep {
   id: string;
   agentId: string;

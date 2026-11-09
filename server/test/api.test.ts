@@ -47,7 +47,10 @@ describe('agents and workflows', () => {
   });
 
   it('gets one agent, and a JSON 404 for an unknown one', async () => {
-    expect((await (await fetch(`${s.url}/api/agents/coding-assistant`)).json()).name).toBe('Full-Stack Coding Assistant');
+    const detail = await (await fetch(`${s.url}/api/agents/coding-assistant`)).json();
+    expect(detail).toMatchObject({ name: 'Full-Stack Coding Assistant', workflows: ['code-review'] });
+    expect(detail.examples.length).toBeGreaterThanOrEqual(2);
+    expect(detail).not.toHaveProperty('systemPrompt');
     const res = await fetch(`${s.url}/api/v1/agents/nope`);
     expect(res.status).toBe(404);
     expect((await res.json()).error).toMatchObject({ code: 'NOT_FOUND', requestId: expect.any(String) });

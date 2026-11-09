@@ -4,6 +4,8 @@ import { RateLimiter } from '../src/middleware/rateLimit.js';
 import { AGENTS, PUBLIC_AGENTS } from '../src/modules/agents/registry.js';
 import { parseCustomAgent, parseHistory } from '../src/modules/chat/schema.js';
 import { readLines } from '../src/modules/providers/types.js';
+import { AGENT_EXAMPLES } from '../src/modules/agents/examples.js';
+import { displayName } from '../src/modules/agents/marketplace.js';
 import { WORKFLOWS } from '../src/modules/workflows/definitions.js';
 import { buildStepPrompt, validateWorkflows } from '../src/modules/workflows/engine.js';
 
@@ -85,5 +87,19 @@ describe('readLines', () => {
     const lines: string[] = [];
     for await (const l of readLines(reader)) lines.push(l);
     expect(lines).toEqual(['data: 1', 'data: 2', 'tail']);
+  });
+});
+
+describe('marketplace data', () => {
+  it('every built-in agent has at least two example prompts, and no example points at an unknown agent', () => {
+    for (const a of AGENTS) expect(AGENT_EXAMPLES[a.id]?.length ?? 0, a.id).toBeGreaterThanOrEqual(2);
+    expect(Object.keys(AGENT_EXAMPLES).every(id => AGENTS.some(a => a.id === id))).toBe(true);
+  });
+
+  it('shows reviewers by first name and last initial only', () => {
+    expect(displayName('Ada Lovelace')).toBe('Ada L.');
+    expect(displayName('Grace Brewster hopper')).toBe('Grace H.');
+    expect(displayName('Cher')).toBe('Cher');
+    expect(displayName('   ')).toBe('AgentVerse user');
   });
 });

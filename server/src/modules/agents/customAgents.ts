@@ -191,7 +191,10 @@ export function customAgentsRouter(platform: Platform, log: Logger): Router {
       const a = await findVisibleAgent(db(), ctx, req.params.id);
       if (!a) return next(notFound('Agent not found'));
       if (!(a.createdById === ctx.user.id || canManage(ctx.workspaceRole))) return next(new HttpError('FORBIDDEN', 'Only the agent\'s creator or a workspace admin can delete it.'));
-      await db().agent.delete({ where: { id: a.id } });
+      await db().$transaction([
+        db().agent.delete({ where: { id: a.id } }),
+        db().agentFavorite.deleteMany({ where: { agentKey: `custom:${a.id}` } })
+      ]);
       await audit(db(), log, { workspaceId: ctx.workspaceId, actorId: ctx.user.id, action: 'agent.deleted', targetType: 'agent', targetId: a.id, metadata: { name: a.versions[0].name }, ip: req.ip });
       res.status(204).end();
     } catch (err) { next(err); }

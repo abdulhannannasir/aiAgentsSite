@@ -9,6 +9,7 @@ import { authOf } from '../middleware/session.js';
 import { findVisibleAgent } from '../modules/agents/customAgents.js';
 import { finishRun, startRun, type Run, type TraceStepRecord } from '../modules/chat/persistence.js';
 import type { Platform } from '../platform.js';
+import { examplesFor } from '../modules/agents/examples.js';
 import { AGENTS, PUBLIC_AGENTS, findAgent } from '../modules/agents/registry.js';
 import { parseCustomAgent, parseHistory } from '../modules/chat/schema.js';
 import type { LLMService } from '../modules/providers/llm.js';
@@ -52,7 +53,8 @@ export function v1Router({ cfg, log, llm, limiter, version, platform }: RouteDep
   r.get('/agents/:id', (req, res, next) => {
     const agent = PUBLIC_AGENTS.find(a => a.id === req.params.id);
     if (!agent) return next(notFound());
-    res.json(agent);
+    // The detail view adds example prompts and the workflows the agent takes part in.
+    res.json({ ...agent, examples: examplesFor(agent.id), workflows: WORKFLOWS.filter(w => w.steps.some(st => st.agentId === agent.id)).map(w => w.id) });
   });
 
   r.get('/workflows', (_req, res) => {
