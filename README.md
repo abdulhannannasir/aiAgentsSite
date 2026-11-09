@@ -17,6 +17,7 @@ Set `DATABASE_URL` (PostgreSQL) and `BETTER_AUTH_SECRET` and the app gains accou
 | A personal **workspace** on sign-up; create more and switch between them; roles owner / admin / member | One browser-local space |
 | Custom agents saved in the workspace, **versioned** on every edit, shared with the workspace or private; agents built as a guest can be moved in with one click | Custom agents in `localStorage` |
 | Chats saved on the server (history loaded from the database, not trusted from the browser) and restored when you reopen an agent; each reply records an execution and usage | Chats end on refresh |
+| Marketplace: favorites, reviews (only after using an agent), usage stats computed from recorded runs | Agent pages without usage numbers or reviews |
 
 ```bash
 createdb agentverse
@@ -148,6 +149,7 @@ BASE_URL=http://127.0.0.1:3801 node e2e/visual.mjs      # SHOTS_DIR=/some/dir al
 BASE_URL=http://127.0.0.1:3801 node e2e/shell.mjs
 # accounts: a server with a database (see the header of e2e/accounts.mjs)
 BASE_URL=http://127.0.0.1:3802 SERVER_LOG=/tmp/agentverse-e2e.log node e2e/accounts.mjs
+BASE_URL=http://127.0.0.1:3802 node e2e/marketplace.mjs
 ```
 
 ## Configuration

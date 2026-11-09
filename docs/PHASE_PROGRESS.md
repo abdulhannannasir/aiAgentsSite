@@ -7,7 +7,7 @@ Single source of truth for where the 12-phase build stands. Updated at the end o
 | 0 | Audit and architecture foundation | ✅ Done |
 | 1 | UI architecture and design system | ✅ Done |
 | 2 | Auth, database, user management | ✅ Done (team invitations UI deferred, see below) |
-| 3 | Agent marketplace | ⚪ Not started (42 agents + builder exist from before) |
+| 3 | Agent marketplace | ✅ Done (per-agent model choice moves to Phase 4, see below) |
 | 4 | Real AI execution engine | ⚪ Not started (OpenAI/Gemini streaming exist from before) |
 | 5 | Multi-agent orchestration | ⚪ Not started (4 sequential workflows exist from before) |
 | 6 | Visual workflow studio | ⚪ Not started |
@@ -158,3 +158,42 @@ server) · e2e accounts 27/27 ✅ (new, DB-backed server; stable over repeated r
 * Token counts stay empty until providers report usage (Phase 4); `modelCalls` is recorded now.
 * Not verified here: a real SMTP server, a Vercel/Railway deploy with a managed database (no credentials in this
   environment). Run `node e2e/smoke.mjs <url>` after deploying.
+
+### Phase 3 — agent marketplace (2026-11-09)
+
+**Implemented**
+* Agent detail pages (`#/app/agent/<id>`): description, category, best-for, example prompts that open the chat ready to
+  send (written for all 42 agents), configuration (current model, tool permissions — labelled as not connected —,
+  input/output format), the workflows the agent belongs to (runnable), usage stats, reviews, and your own runs and
+  recent conversations.
+* Real usage stats per agent from recorded executions: runs in the last 30 days, all-time runs, completion rate, plus
+  average rating and review count. Workflow runs are not credited to the agent whose chat they started in. Without a
+  database nothing is shown and the page says why — no invented numbers.
+* Discover: cards show rating and 30-day runs when recorded; sort by Featured, Most used (30 days), Highest rated, name,
+  category (usage sorts only appear when the data exists); favorites toggle and a Favorites filter (signed in).
+* Reviews: 1–5 whole stars + optional comment, one per person per agent, editable and deletable, **only from people who
+  have run the agent**; reviewers are shown as first name + last initial because reviews are visible across workspaces.
+* Favorites for built-in agents and saved agents you can see; removed automatically when a saved agent is deleted.
+* Version history for saved custom agents (My Agents → History).
+* Honesty fix: the hand-picked `mostUsed` flag was labelled "Popular" though nothing measured it; it is now
+  "Featured", and popularity comes from real runs.
+
+**Bugs found and fixed while testing**
+* Any malformed `#/app/...` link fell through to the landing page; it now shows "not found".
+* On servers without a database every page load requested marketplace stats and logged a 503 in the browser console;
+  the client now checks `/api/v1/meta` first and doesn't ask.
+* Opening an unknown agent id made a request that could only 404; the page now answers from the loaded agent list.
+
+**Database changes** — migration `20261109003328_marketplace` (additive: `agent_favorites`, `agent_reviews`, one index).
+
+**API changes** — new `/api/v1/marketplace/*`; `GET /api/v1/agents/:id` adds `examples` and `workflows` (additive).
+
+**Tests** — typecheck ✅ · client unit 69/69 ✅ · server 90/90 ✅ (6 new PostgreSQL tests: honest zeros, run counting and
+30-day window, success rate, workflow runs excluded, review eligibility and validation, one review per person,
+averages, guest read-only, favorites visibility and cleanup, 503 without a database) · build ✅ · e2e features 79/79 ✅ ·
+visual 76/76 ✅ · shell 74/74 ✅ · smoke 9/9 ✅ · accounts 27/27 ✅ · marketplace 14/14 ✅ (new; stable on reruns against a
+non-empty database).
+
+**Deferred to Phase 4** (they need the provider registry): per-agent provider/model, input/output schemas, knowledge
+files and memory settings in the builder. Publishing agents to other workspaces is not offered yet (custom agents are
+private or shared with one workspace).
