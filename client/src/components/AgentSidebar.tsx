@@ -35,9 +35,9 @@ function CustomAgentCard({ agent, selected, active, onSelect, onEdit, onExport, 
         {active && <StatusChip status="active" />}
       </button>
       <div className="mt-2 flex flex-wrap gap-1 border-t border-line pt-2">
-        <button type="button" onClick={onEdit} className={btn} aria-label={`Edit ${agent.name}`}><Pencil size={12} aria-hidden /> Edit</button>
+        {agent.canEdit !== false && <button type="button" onClick={onEdit} className={btn} aria-label={`Edit ${agent.name}`}><Pencil size={12} aria-hidden /> Edit</button>}
         <button type="button" onClick={onExport} className={btn} aria-label={`Export ${agent.name} as JSON`}><FileJson size={12} aria-hidden /> Export</button>
-        <button type="button" onClick={onImportInto} className={btn} aria-label={`Import a JSON file into ${agent.name}`}><Upload size={12} aria-hidden /> Import</button>
+        {agent.canEdit !== false && <button type="button" onClick={onImportInto} className={btn} aria-label={`Import a JSON file into ${agent.name}`}><Upload size={12} aria-hidden /> Import</button>}
       </div>
     </div>
   );
@@ -49,7 +49,7 @@ export function AgentSidebar(p: Props) {
   const categories = useMemo(() => ['all', ...new Set(p.agents.map(a => a.category))], [p.agents]);
   const visible = useMemo(() => {
     const inCat = category === 'all' ? p.agents : p.agents.filter(a => a.category === category);
-    return [...inCat].sort((a, b) => Number(b.mostUsed) - Number(a.mostUsed)); // popular first, otherwise stable
+    return [...inCat].sort((a, b) => Number(b.mostUsed) - Number(a.mostUsed)); // featured first, otherwise stable
   }, [p.agents, category]);
 
   return (
@@ -95,7 +95,7 @@ export function AgentSidebar(p: Props) {
       <section className="glass flex min-h-0 flex-1 flex-col rounded-2xl p-4" aria-labelledby="all-agents-h">
         <div className="mb-3">
           <h2 id="all-agents-h" className="font-display text-base font-bold">{category === 'all' ? 'All agents' : category}</h2>
-          <p className="text-xs text-muted">{visible.length} agent{visible.length === 1 ? '' : 's'} · popular first</p>
+          <p className="text-xs text-muted">{visible.length} agent{visible.length === 1 ? '' : 's'} · featured first</p>
         </div>
         <div ref={list} className="no-scrollbar -mr-1 grid max-h-[460px] auto-rows-max content-start gap-2.5 overflow-y-auto pr-1 lg:max-h-none lg:flex-1" data-testid="agent-list">
           {visible.map(a => {
@@ -111,7 +111,7 @@ export function AgentSidebar(p: Props) {
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-2">
                       <span className="truncate font-display text-sm font-semibold">{a.name}</span>
-                      {active ? <StatusChip status="active" className="shrink-0" /> : a.mostUsed && <span className="shrink-0 rounded-full bg-accent px-1.5 py-px font-mono text-[9px] font-bold uppercase text-on-accent">Popular</span>}
+                      {active ? <StatusChip status="active" className="shrink-0" /> : a.mostUsed && <span className="shrink-0 rounded-full bg-accent px-1.5 py-px font-mono text-[9px] font-bold uppercase text-on-accent">Featured</span>}
                     </span>
                     <span className="mt-0.5 line-clamp-2 block text-xs text-muted">{a.description}</span>
                     <span className="mt-1.5 flex justify-between gap-2 font-mono text-[10px] uppercase tracking-wider"><span className="truncate text-muted">{a.category}</span><span className="truncate text-accent">{a.useCase}</span></span>

@@ -1,26 +1,48 @@
 {
   "name": "agentverse-website",
-  "version": "2.1.0",
-  "description": "Pre-made AI Agent Platform: React front end + Express API",
+  "version": "2.2.0",
+  "description": "AgentVerse AI agent platform: React front end + Express API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js",
+    "dev": "tsx watch server/src/dev.ts",
     "dev:client": "vite",
-    "build": "tsc --noEmit && vite build",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "prisma generate && tsc -p server/tsconfig.json",
+    "build:client": "tsc --noEmit && vite build",
+    "test": "vitest run && vitest run -c vitest.server.config.ts",
+    "test:client": "vitest run",
+    "test:server": "vitest run -c vitest.server.config.ts",
+    "typecheck": "tsc --noEmit && tsc -p server/tsconfig.json --noEmit",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
+    "postinstall": "prisma generate",
+    "release": "node scripts/release.mjs"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1",
+    "better-auth": "^1.7.18",
     "cors": "^2.8.5",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "helmet": "^8.3.0",
+    "nodemailer": "^10.4.0",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "undici": "^7.30.2",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource-variable/space-grotesk": "^5.3.0",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.18.0",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.25",
     "@types/node": "^22.10.0",
+    "@types/nodemailer": "^8.0.2",
+    "@types/pg": "^8.23.1",
     "@types/prismjs": "^1.26.5",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
@@ -34,16 +56,19 @@
     "lucide-react": "^0.460.0",
     "marked": "^14.1.4",
     "postcss": "^8.4.49",
+    "prisma": "^7.10.1",
     "prismjs": "^1.29.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "tailwindcss": "^3.4.17",
     "three": "^0.160.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.6.3",
     "vite": "^5.4.11",
     "vitest": "^2.1.8"
   },
   "engines": {
-    "node": ">=18.0.0"
-  }
+    "node": ">=20.19.0"
+  },
+  "type": "module"
 }

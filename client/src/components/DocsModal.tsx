@@ -17,14 +17,14 @@ export function DocsModal({ open, onClose }: { open: boolean; onClose: () => voi
         </Section>
         <Section title="Multi-agent workflows">
           <p>Type <code>/</code> in the chat box to see workflows: <strong>/research</strong>, <strong>/code-review</strong>, <strong>/legal-draft</strong> and <strong>/brainstorm</strong>. Each one runs a real pipeline of separate model calls as different agents, and every step sees the output of the steps before it. The last step writes the answer.</p>
-          <p>Workflows run on the model's own knowledge. There is no live web access, so research output should be verified.</p>
+          <p>Workflow steps run on the model's own knowledge, without tools, so research output should be verified.</p>
         </Section>
         <Section title="Thought stream">
-          <p>Every reply has a collapsible <strong>Thought stream</strong> showing which agent did what, in order, with a status for each step (Pending, Active, Complete or Failed) and the text each step produced. It is what actually happened, not a summary.</p>
+          <p>Every reply has a collapsible <strong>Thought stream</strong> showing which agent did what, in order, with a status for each step (Pending, Active, Complete or Failed), the text each step produced, and every tool the agent called with its result. It is what actually happened, not a summary.</p>
         </Section>
         <Section title="Your own agents">
-          <p>Use <strong>New</strong> in <em>My agents</em> to build an agent: a name, a system prompt, a temperature and tool permissions. Start from a template to avoid writing a prompt from scratch. Custom agents are saved in this browser only.</p>
-          <p>Tool permissions are simulated in this demo: nothing is actually searched, run or sent.</p>
+          <p>Use <strong>New</strong> in <em>My agents</em> to build an agent: a name, a system prompt, a temperature and tool permissions. Start from a template to avoid writing a prompt from scratch. Guests' agents are saved in this browser; signed-in users' agents are saved in their workspace.</p>
+          <p>Tools: an agent may call the tools it is permitted, if they are available on this server (calculator, date and time, reading public web pages, and web search when configured). Tools that need a sandbox or an integration are not available yet and are never pretended. In demo mode no tools run.</p>
         </Section>
         <Section title="Export and import agents">
           <p><strong>Export</strong> downloads a <code>.json</code> file; <strong>Import</strong> loads one into the editor so you can review it before saving. Files look like:</p>

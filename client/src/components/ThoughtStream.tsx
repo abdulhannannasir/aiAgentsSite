@@ -51,8 +51,9 @@ export function ThoughtStream({ steps, running }: Props) {
   const [stepOpen, setStepOpen] = useState<Record<string, boolean>>({});
   const open = toggled ?? running;
 
-  const done = steps.filter(s => s.status === 'complete').length;
-  const failed = steps.some(s => s.status === 'error');
+  const done = steps.filter(s => s.status === 'complete' || (s.kind === 'tool' && s.status === 'error')).length;
+  // A failed tool call goes back to the model, which can recover, so only agent steps decide the overall status.
+  const failed = steps.some(s => s.status === 'error' && s.kind !== 'tool');
   const overall: StepStatus = failed ? 'error' : running ? 'active' : done === steps.length ? 'complete' : 'pending';
   const panelId = `thought-${steps.map(s => s.id).join('-')}`;
 

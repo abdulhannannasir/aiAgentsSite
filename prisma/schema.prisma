@@ -1,0 +1,424 @@
+// AgentVerse database schema (PostgreSQL). Design notes: docs/DATABASE_DESIGN.md
+//
+// Tenancy: an Organization (Better Auth's organization plugin) is a workspace. Every business row carries
+// workspaceId, and the API only ever reads it from the signed-in session's active membership.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../server/src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================ auth (Better Auth core + admin plugin)
+
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  /// Platform role (admin plugin): "user" | "admin" | "superadmin". Workspace roles live on Member.
+  role          String?   @default("user")
+  banned        Boolean?  @default(false)
+  banReason     String?
+  banExpires    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  sessions      Session[]
+  accounts      Account[]
+  memberships   Member[]
+  invitations   Invitation[]
+  agents        Agent[]          @relation("AgentCreator")
+  agentVersions AgentVersion[]
+  conversations Conversation[]
+  executions    AgentExecution[]
+  notifications Notification[]
+  usage         UsageRecord[]
+  auditLogs     AuditLog[]
+  favorites     AgentFavorite[]
+  reviews       AgentReview[]
+
+  @@map("users")
+}
+
+model Session {
+  id                   String   @id
+  token                String   @unique
+  expiresAt            DateTime
+  ipAddress            String?
+  userAgent            String?
+  userId               String
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activeOrganizationId String?
+  impersonatedBy       String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  /// scrypt hash for email + password accounts (never plain text)
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("accounts")
+}
+
+/// Email verification and password-reset tokens.
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verifications")
+}
+
+// ============================================================ workspaces (Better Auth organization plugin)
+
+/// A workspace.
+model Organization {
+  id        String   @id
+  name      String
+  slug      String   @unique
+  logo      String?
+  metadata  String?
+  createdAt DateTime @default(now())
+
+  members       Member[]
+  invitations   Invitation[]
+  agents        Agent[]
+  conversations Conversation[]
+  executions    AgentExecution[]
+  usage         UsageRecord[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
+
+  @@map("workspaces")
+}
+
+/// Workspace membership. role: "owner" | "admin" | "member".
+model Member {
+  id             String       @id
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           String       @default("member")
+  createdAt      DateTime     @default(now())
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@map("workspace_members")
+}
+
+model Invitation {
+  id             String       @id
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  email          String
+  role           String?
+  status         String       @default("pending")
+  expiresAt      DateTime
+  inviterId      String
+  inviter        User         @relation(fields: [inviterId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId])
+  @@index([email])
+  @@map("workspace_invitations")
+}
+
+// ============================================================ agents
+
+enum AgentVisibility {
+  PRIVATE   // only the creator sees it
+  WORKSPACE // every member of the workspace sees it
+}
+
+/// A user-built agent. Its configuration lives in immutable AgentVersion rows; edits create a new version.
+model Agent {
+  id             String          @id @default(cuid())
+  workspaceId    String
+  workspace      Organization    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdById    String?
+  createdBy      User?           @relation("AgentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  visibility     AgentVisibility @default(WORKSPACE)
+  currentVersion Int             @default(1)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  versions      AgentVersion[]
+  conversations Conversation[]
+  executions    AgentExecution[]
+
+  @@index([workspaceId, updatedAt(sort: Desc)])
+  @@map("agents")
+}
+
+model AgentVersion {
+  id           String   @id @default(cuid())
+  agentId      String
+  agent        Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  version      Int
+  name         String
+  description  String   @default("")
+  icon         String   @default("🤖")
+  systemPrompt String
+  temperature  Float    @default(0.7)
+  tools        String[]
+  /// null = the deployment's default provider / model (per-agent choice arrives in Phase 4)
+  provider     String?
+  model        String?
+  createdById  String?
+  createdBy    User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  executions AgentExecution[]
+
+  @@unique([agentId, version])
+  @@map("agent_versions")
+}
+
+// ============================================================ marketplace (Phase 3)
+
+/// A user's starred agent. agentKey: a built-in agent id, or "custom:<agentId>" for a saved agent they can see.
+model AgentFavorite {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentKey  String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, agentKey])
+  @@map("agent_favorites")
+}
+
+/// A rating (1-5) and optional comment on a built-in agent. One per user per agent; only users who have run the
+/// agent may review it.
+model AgentReview {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agentKey  String
+  rating    Int
+  comment   String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, agentKey])
+  @@index([agentKey, updatedAt(sort: Desc)])
+  @@map("agent_reviews")
+}
+
+// ============================================================ conversations and executions
+
+model Conversation {
+  id          String       @id @default(cuid())
+  workspaceId String
+  workspace   Organization @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Who the thread is with: a built-in agent id, or "custom:<agentId>"
+  agentKey    String
+  agentId     String?
+  agent       Agent?       @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  title       String
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  messages   Message[]
+  executions AgentExecution[]
+
+  @@index([workspaceId, userId, agentKey, updatedAt(sort: Desc)])
+  @@map("conversations")
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
+enum MessageStatus {
+  DONE
+  ERROR
+}
+
+model Message {
+  id             String        @id @default(cuid())
+  conversationId String
+  conversation   Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           MessageRole
+  content        String
+  status         MessageStatus @default(DONE)
+  error          String?
+  /// Workflow steps as shown in the thought stream: [{ id, role, agentName, label, status, output }]
+  trace          Json?
+  workflowId     String?
+  executionId    String?       @unique
+  execution      AgentExecution? @relation(fields: [executionId], references: [id], onDelete: SetNull)
+  createdAt      DateTime      @default(now())
+
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+enum ExecutionStatus {
+  QUEUED
+  RUNNING
+  WAITING_INPUT
+  WAITING_APPROVAL
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+/// One run of an agent or workflow: who, what, which configuration, how it ended.
+model AgentExecution {
+  id             String          @id @default(cuid())
+  workspaceId    String
+  workspace      Organization    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId         String?
+  user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  conversationId String?
+  conversation   Conversation?   @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  agentKey       String
+  agentId        String?
+  agent          Agent?          @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  agentVersionId String?
+  agentVersion   AgentVersion?   @relation(fields: [agentVersionId], references: [id], onDelete: SetNull)
+  workflowId     String?
+  status         ExecutionStatus @default(QUEUED)
+  provider       String
+  model          String?
+  input          String
+  output         String?
+  error          String?
+  /// Model calls made (1 for a chat reply, one per step for a workflow)
+  modelCalls     Int             @default(0)
+  /// Token counts when the provider reports them (Phase 4); null = not reported
+  inputTokens    Int?
+  outputTokens   Int?
+  startedAt      DateTime?
+  endedAt        DateTime?
+  createdAt      DateTime        @default(now())
+
+  message Message?
+  usage   UsageRecord[]
+  tools   ToolInvocation[]
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([workspaceId, status])
+  @@index([agentKey, createdAt])
+  @@map("agent_executions")
+}
+
+enum ToolInvocationStatus {
+  SUCCEEDED
+  FAILED
+}
+
+/// One tool call made during an execution: what was asked, what came back (shortened), how long it took.
+model ToolInvocation {
+  id          String               @id @default(cuid())
+  executionId String
+  execution   AgentExecution       @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  toolId      String
+  input       Json
+  status      ToolInvocationStatus
+  summary     String
+  durationMs  Int
+  createdAt   DateTime             @default(now())
+
+  @@index([executionId, createdAt])
+  @@index([toolId, createdAt])
+  @@map("tool_invocations")
+}
+
+enum UsageKind {
+  AI_REQUEST
+  INPUT_TOKENS
+  OUTPUT_TOKENS
+  WORKFLOW_RUN
+}
+
+/// Append-only metering, the basis for analytics (Phase 9) and plan limits (Phase 10).
+model UsageRecord {
+  id          String          @id @default(cuid())
+  workspaceId String
+  workspace   Organization    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  kind        UsageKind
+  quantity    Int
+  provider    String?
+  model       String?
+  executionId String?
+  execution   AgentExecution? @relation(fields: [executionId], references: [id], onDelete: SetNull)
+  occurredAt  DateTime        @default(now())
+
+  @@index([workspaceId, kind, occurredAt])
+  @@map("usage_records")
+}
+
+// ============================================================ audit and notifications
+
+/// Append-only record of security-relevant actions.
+model AuditLog {
+  id          String        @id @default(cuid())
+  workspaceId String?
+  workspace   Organization? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  actorId     String?
+  actor       User?         @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  action      String
+  targetType  String?
+  targetId    String?
+  metadata    Json?
+  ip          String?
+  createdAt   DateTime      @default(now())
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id          String        @id @default(cuid())
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String?
+  workspace   Organization? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  kind        String
+  title       String
+  body        String?
+  link        String?
+  readAt      DateTime?
+  createdAt   DateTime      @default(now())
+
+  @@index([userId, readAt, createdAt(sort: Desc)])
+  @@map("notifications")
+}
