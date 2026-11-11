@@ -3,8 +3,10 @@ import type { AppConfig } from '../../config/env.js';
 import type { HistoryMessage } from '../../contracts.js';
 import type { ChatAgent } from '../providers/types.js';
 
-/** Tool permission names an agent may carry. They are labels until the Phase 4 tool registry exists. */
-export const TOOL_NAMES = new Set(['web_search', 'calculator', 'code_interpreter', 'file_reader', 'ticket_system', 'email_sender', 'knowledge_base']);
+import { TOOL_IDS } from '../tools/registry.js';
+
+/** Tool permission names an agent may carry (whether each is usable depends on the server, see /api/v1/tools). */
+export const TOOL_NAMES: ReadonlySet<string> = new Set(TOOL_IDS);
 
 /**
  * Chat is stateless for guests: the browser keeps the conversation and sends the recent turns with each request.

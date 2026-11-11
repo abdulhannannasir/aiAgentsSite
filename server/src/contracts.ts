@@ -60,7 +60,8 @@ export interface PlanStep {
 
 /** Events streamed back from POST /api/v1/chat (one JSON object per SSE `data:` line). */
 export type ChatEvent =
-  | { type: 'conversation'; id: string } // signed-in requests: the server-side conversation this reply is saved in
+  | { type: 'conversation'; id: string; executionId: string } // signed-in requests: where this reply is saved
+  | { type: 'tool'; id: string; tool: string; label: string; status: 'running' | 'done' | 'error'; input?: Record<string, unknown>; summary?: string; durationMs?: number }
   | { type: 'plan'; workflowId: string; steps: PlanStep[] }
   | { type: 'step'; id: string; status: StepStatus; error?: string }
   | { type: 'step_delta'; id: string; content: string }

@@ -7,6 +7,7 @@ import { authOf, canManage, requireAuth, type AuthContext } from '../../middlewa
 import type { Platform } from '../../platform.js';
 import { audit } from '../audit/audit.js';
 import { TOOL_NAMES } from '../chat/schema.js';
+import type { LLMService } from '../providers/llm.js';
 
 export const MAX_AGENTS_PER_WORKSPACE = 200;
 // eslint-disable-next-line no-control-regex
@@ -21,8 +22,11 @@ export const AgentDraftSchema = z.object({
   systemPrompt: z.string().transform(clean).pipe(z.string().min(1, 'System prompt is required').max(4000, 'System prompt is too long (max 4000)')),
   temperature: z.number().finite().min(0).max(2).default(0.7),
   tools: z.array(z.string()).max(20).default([]).transform(t => [...new Set(t.filter(x => TOOL_NAMES.has(x)))]),
-  visibility: z.enum(['PRIVATE', 'WORKSPACE']).default('WORKSPACE')
-});
+  visibility: z.enum(['PRIVATE', 'WORKSPACE']).default('WORKSPACE'),
+  // A specific model for this agent (both or neither); null/absent = the deployment's default.
+  provider: z.enum(['openai', 'gemini']).nullable().default(null),
+  model: z.string().trim().min(1).max(100).nullable().default(null)
+}).refine(d => (d.provider === null) === (d.model === null), { message: 'Choose both a provider and a model, or neither.' });
 export type AgentDraftInput = z.infer<typeof AgentDraftSchema>;
 
 /** What the API returns for a custom agent (the browser's CustomAgent shape plus server metadata). */
@@ -34,6 +38,8 @@ export interface CustomAgentDto {
   systemPrompt: string;
   temperature: number;
   tools: string[];
+  provider: string | null;
+  model: string | null;
   visibility: 'PRIVATE' | 'WORKSPACE';
   version: number;
   versionId: string;
@@ -46,14 +52,14 @@ export interface CustomAgentDto {
 
 const withLatest = { versions: { orderBy: { version: 'desc' as const }, take: 1 }, createdBy: { select: { name: true } } };
 type AgentRow = NonNullable<Awaited<ReturnType<Db['agent']['findFirst']>>> & {
-  versions: Array<{ id: string; version: number; name: string; description: string; icon: string; systemPrompt: string; temperature: number; tools: string[] }>;
+  versions: Array<{ id: string; version: number; name: string; description: string; icon: string; systemPrompt: string; temperature: number; tools: string[]; provider: string | null; model: string | null }>;
   createdBy: { name: string } | null;
 };
 
 const toDto = (a: AgentRow, ctx: AuthContext): CustomAgentDto => {
   const v = a.versions[0];
   return {
-    id: a.id, name: v.name, description: v.description, icon: v.icon, systemPrompt: v.systemPrompt, temperature: v.temperature, tools: v.tools,
+    id: a.id, name: v.name, description: v.description, icon: v.icon, systemPrompt: v.systemPrompt, temperature: v.temperature, tools: v.tools, provider: v.provider, model: v.model,
     visibility: a.visibility, version: v.version, versionId: v.id, createdById: a.createdById, createdByName: a.createdBy?.name ?? null,
     canEdit: a.createdById === ctx.user.id || canManage(ctx.workspaceRole),
     createdAt: a.createdAt.getTime(), updatedAt: a.updatedAt.getTime()
@@ -72,7 +78,10 @@ export async function findVisibleAgent(db: Db, ctx: AuthContext, id: string) {
   return a as AgentRow | null;
 }
 
-export function customAgentsRouter(platform: Platform, log: Logger): Router {
+export function customAgentsRouter(platform: Platform, log: Logger, llm: Pick<LLMService, 'isSelectable'>): Router {
+  /** A pinned model must be one this server offers (GET /api/v1/models). */
+  const modelProblem = (d: AgentDraftInput) =>
+    d.provider && d.model && !llm.isSelectable(d.provider, d.model) ? `The model "${d.model}" is not available on this server.` : null;
   const r = Router();
   r.use(requireAuth(platform));
   const db = () => platform.db!;
@@ -80,7 +89,7 @@ export function customAgentsRouter(platform: Platform, log: Logger): Router {
   const create = async (ctx: AuthContext, d: AgentDraftInput) => db().agent.create({
     data: {
       workspaceId: ctx.workspaceId, createdById: ctx.user.id, visibility: d.visibility, currentVersion: 1,
-      versions: { create: { version: 1, name: d.name, description: d.description, icon: d.icon, systemPrompt: d.systemPrompt, temperature: d.temperature, tools: d.tools, createdById: ctx.user.id } }
+      versions: { create: { version: 1, name: d.name, description: d.description, icon: d.icon, systemPrompt: d.systemPrompt, temperature: d.temperature, tools: d.tools, provider: d.provider, model: d.model, createdById: ctx.user.id } }
     },
     include: withLatest
   }) as Promise<AgentRow>;
@@ -116,6 +125,8 @@ export function customAgentsRouter(platform: Platform, log: Logger): Router {
       const ctx = authOf(res)!;
       const parsed = AgentDraftSchema.safeParse(req.body);
       if (!parsed.success) return next(badRequest(parsed.error.issues[0].message, parsed.error.issues.map(i => ({ path: i.path.join('.'), message: i.message }))));
+      const problem = modelProblem(parsed.data);
+      if (problem) return next(badRequest(problem));
       if (await db().agent.count({ where: { workspaceId: ctx.workspaceId } }) >= MAX_AGENTS_PER_WORKSPACE) {
         return next(badRequest(`A workspace can hold up to ${MAX_AGENTS_PER_WORKSPACE} custom agents.`));
       }
@@ -136,6 +147,8 @@ export function customAgentsRouter(platform: Platform, log: Logger): Router {
       for (const [i, raw] of body.data.agents.entries()) {
         const p = AgentDraftSchema.safeParse(raw);
         if (!p.success) return next(badRequest(`Agent ${i + 1}: ${p.error.issues[0].message}`));
+        const problem = modelProblem(p.data);
+        if (problem) return next(badRequest(`Agent ${i + 1}: ${problem}`));
         drafts.push(p.data);
       }
       const existing = await db().agent.count({ where: { workspaceId: ctx.workspaceId } });
@@ -143,7 +156,7 @@ export function customAgentsRouter(platform: Platform, log: Logger): Router {
       const created = await db().$transaction(drafts.map(d => db().agent.create({
         data: {
           workspaceId: ctx.workspaceId, createdById: ctx.user.id, visibility: d.visibility, currentVersion: 1,
-          versions: { create: { version: 1, name: d.name, description: d.description, icon: d.icon, systemPrompt: d.systemPrompt, temperature: d.temperature, tools: d.tools, createdById: ctx.user.id } }
+          versions: { create: { version: 1, name: d.name, description: d.description, icon: d.icon, systemPrompt: d.systemPrompt, temperature: d.temperature, tools: d.tools, provider: d.provider, model: d.model, createdById: ctx.user.id } }
         },
         include: withLatest
       })));
@@ -162,12 +175,15 @@ export function customAgentsRouter(platform: Platform, log: Logger): Router {
       const latest = a.versions[0];
       const merged = AgentDraftSchema.safeParse({
         name: latest.name, description: latest.description, icon: latest.icon, systemPrompt: latest.systemPrompt,
-        temperature: latest.temperature, tools: latest.tools, visibility: a.visibility, ...(req.body ?? {})
+        temperature: latest.temperature, tools: latest.tools, visibility: a.visibility, provider: latest.provider, model: latest.model, ...(req.body ?? {})
       });
       if (!merged.success) return next(badRequest(merged.error.issues[0].message));
       const d = merged.data;
+      const pinnedChanged = d.provider !== latest.provider || d.model !== latest.model;
+      const problem = pinnedChanged ? modelProblem(d) : null; // an unchanged pin may stay even if the server dropped it
+      if (problem) return next(badRequest(problem));
       const configChanged = d.name !== latest.name || d.description !== latest.description || d.icon !== latest.icon || d.systemPrompt !== latest.systemPrompt
-        || d.temperature !== latest.temperature || d.tools.join() !== latest.tools.join();
+        || d.temperature !== latest.temperature || d.tools.join() !== latest.tools.join() || pinnedChanged;
       const next_ = latest.version + 1;
       const updated = await db().agent.update({
         where: { id: a.id },
@@ -175,7 +191,7 @@ export function customAgentsRouter(platform: Platform, log: Logger): Router {
           visibility: d.visibility,
           ...(configChanged && {
             currentVersion: next_,
-            versions: { create: { version: next_, name: d.name, description: d.description, icon: d.icon, systemPrompt: d.systemPrompt, temperature: d.temperature, tools: d.tools, createdById: ctx.user.id } }
+            versions: { create: { version: next_, name: d.name, description: d.description, icon: d.icon, systemPrompt: d.systemPrompt, temperature: d.temperature, tools: d.tools, provider: d.provider, model: d.model, createdById: ctx.user.id } }
           })
         },
         include: withLatest

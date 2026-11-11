@@ -107,7 +107,7 @@ describe('chat in demo mode', () => {
     expect(r.status).toBe(200);
     expect(r.text).toMatch(/Sales & Lead Generator/);
     expect(r.text).toMatch(/Demo mode/);
-    expect(r.text).toMatch(/Tools are not connected yet, so none were run/);
+    expect(r.text).toMatch(/Tools only run with a real model, so none were run here/);
     expect(r.text).not.toMatch(/Status: Sent|Ticket #/); // the old fake tool results are gone
     expect(r.events.at(-1)).toEqual({ type: 'done', message: { role: 'assistant', content: r.text } });
   });

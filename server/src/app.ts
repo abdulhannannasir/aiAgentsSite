@@ -11,10 +11,12 @@ import { toNodeHandler } from 'better-auth/node';
 import { unavailable } from './lib/errors.js';
 import { customAgentsRouter } from './modules/agents/customAgents.js';
 import { marketplaceRouter } from './modules/agents/marketplace.js';
+import { executionsRouter } from './modules/executions/routes.js';
 import { conversationsRouter } from './modules/chat/conversations.js';
 import { accountRouter } from './modules/workspaces/routes.js';
 import { createPlatform, type Platform } from './platform.js';
 import { createLLMService, type LLMService } from './modules/providers/llm.js';
+import { createToolRegistry, type ToolRegistry, type ToolRegistryOptions } from './modules/tools/registry.js';
 import { validateWorkflows } from './modules/workflows/engine.js';
 import { v1Router } from './routes/v1.js';
 
@@ -33,6 +35,7 @@ export interface AppContext {
   cfg: AppConfig;
   log: Logger;
   llm: LLMService;
+  tools: ToolRegistry;
   platform: Platform;
   /** Stops timers and closes the database pool so tests and graceful shutdown leave nothing running. */
   close: () => Promise<void>;
@@ -44,13 +47,16 @@ export interface AppOptions {
   demoDelay?: () => number;
   /** Directory with the built front end. Defaults to <repo>/public. */
   staticDir?: string | null;
+  /** Tests: tool options (e.g. let url_fetch reach the local mock server). */
+  tools?: Partial<ToolRegistryOptions>;
 }
 
 /** Builds the Express app. Used by server.js (local / Docker / Railway), the Vercel function and the tests. */
 export function createApp(cfg: AppConfig, opts: AppOptions = {}): AppContext {
   validateWorkflows();
   const log = opts.logger ?? createLogger(cfg.logLevel);
-  const llm = createLLMService(cfg, log, { demoDelay: opts.demoDelay });
+  const tools = createToolRegistry({ tavilyApiKey: cfg.tools.tavilyApiKey, tavilyBaseUrl: cfg.tools.tavilyBaseUrl, ...opts.tools });
+  const llm = createLLMService(cfg, log, tools, { demoDelay: opts.demoDelay });
   const limiter = new RateLimiter(cfg.limits.rateLimit.windowMs, cfg.limits.rateLimit.max);
   const platform = createPlatform(cfg, log);
 
@@ -73,15 +79,16 @@ export function createApp(cfg: AppConfig, opts: AppOptions = {}): AppContext {
   app.get('/healthz', (_req, res) => res.type('text').send('ok'));
 
   app.use('/api', originGuard([cfg.auth.baseUrl, ...cfg.corsOrigins]), attachAuth(platform, log));
-  const api = v1Router({ cfg, log, llm, limiter, version: readVersion(), platform });
+  const api = v1Router({ cfg, log, llm, tools, limiter, version: readVersion(), platform });
   app.use('/api/v1', accountRouter(platform, log));
-  app.use('/api/v1/custom-agents', customAgentsRouter(platform, log));
+  app.use('/api/v1/custom-agents', customAgentsRouter(platform, log, llm));
   app.use('/api/v1/conversations', conversationsRouter(platform, log));
   app.use('/api/v1/marketplace', marketplaceRouter(platform, log));
+  app.use('/api/v1/executions', executionsRouter(platform, log));
   app.use('/api/v1', api);
   app.use('/api', api); // unversioned aliases, kept for existing clients
   app.use('/api', apiNotFound);
   app.use(errorHandler(log));
 
-  return { app, cfg, log, llm, platform, close: async () => { limiter.close(); await platform.close(); } };
+  return { app, cfg, log, llm, tools, platform, close: async () => { limiter.close(); await platform.close(); } };
 }

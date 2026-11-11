@@ -192,7 +192,8 @@ describe.skipIf(!TEST_DB)('saved chats (PostgreSQL)', () => {
     const r = await a.c.chat({ customAgentId: agent.id, message: 'hi' });
     expect(r.answer).toBe('Arr');
     const body = JSON.parse(upstream.calls[0].body);
-    expect(body.messages[0]).toEqual({ role: 'system', content: 'Version two prompt' });
+    expect(body.messages[0].content).toMatch(/^Version two prompt\n\nYou can call tools/); // the agent may use the calculator
+    expect(body.tools.map((t: { function: { name: string } }) => t.function.name)).toEqual(['calculator']);
     expect(body.temperature).toBe(0.9);
     const [ex] = await sql<{ agentKey: string; version: number }>('SELECT e."agentKey", v.version FROM agent_executions e JOIN agent_versions v ON v.id = e."agentVersionId"');
     expect(ex).toEqual({ agentKey: `custom:${agent.id}`, version: 2 });

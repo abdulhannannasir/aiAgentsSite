@@ -1,32 +1,53 @@
 import type { GeminiConfig } from '../../config/env.js';
-import type { HistoryMessage } from '../../contracts.js';
 import type { Logger } from '../../lib/logger.js';
 import { sleep } from '../../lib/time.js';
-import type { ChatAgent, ProviderAdapter } from './types.js';
+import type { ProviderAdapter, ProviderEvent, ProviderRequest, Turn } from './types.js';
+import { ProviderError, kindForStatus } from './types.js';
 
 // Temporary server trouble: retry the same model, then try the next one.
 const RETRY_STATUSES = new Set([500, 502, 503, 504]);
 
-type GeminiContent = { role: 'user' | 'model'; parts: [{ text: string }] };
+type GeminiPart =
+  | { text: string; thought?: boolean }
+  | { functionCall: { name: string; args: Record<string, unknown> }; thoughtSignature?: string }
+  | { functionResponse: { name: string; response: Record<string, unknown> } };
+type GeminiContent = { role: 'user' | 'model'; parts: GeminiPart[] };
 
 /** The parts of a streamed Gemini chunk we read. */
 interface GeminiChunk {
   error?: { message?: string };
   promptFeedback?: { blockReason?: string };
-  candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean }> } }>;
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string; thought?: boolean; functionCall?: { name?: string; args?: Record<string, unknown> }; thoughtSignature?: string }> } }>;
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number; thoughtsTokenCount?: number };
 }
 
 /**
- * Gemini wants roles 'user' / 'model', starting with 'user'. Merge neighbours that share a role and drop any
- * leading model turns (history is capped, so it can start mid-conversation).
+ * Gemini wants roles 'user' / 'model', starting with 'user'. Tool results travel as functionResponse parts in a 'user'
+ * turn. Neighbours that share a role are merged (text parts joined) and leading model turns are dropped (history is
+ * capped, so it can start mid-conversation).
  */
-export function toGeminiContents(messages: HistoryMessage[]): GeminiContent[] {
+export function toGeminiContents(turns: Turn[]): GeminiContent[] {
   const contents: GeminiContent[] = [];
-  for (const m of messages) {
-    const role = m.role === 'assistant' ? 'model' : 'user';
+  const push = (role: GeminiContent['role'], parts: GeminiPart[]) => {
     const last = contents[contents.length - 1];
-    if (last && last.role === role) last.parts[0].text += `\n\n${m.content}`;
-    else contents.push({ role, parts: [{ text: m.content }] });
+    if (!last || last.role !== role) { contents.push({ role, parts: [...parts] }); return; }
+    for (const p of parts) {
+      const prev = last.parts[last.parts.length - 1];
+      if ('text' in p && prev && 'text' in prev) prev.text += `\n\n${p.text}`;
+      else last.parts.push(p);
+    }
+  };
+  for (const t of turns) {
+    if (t.role === 'user') push('user', [{ text: t.content }]);
+    else if (t.role === 'tool') push('user', [{ functionResponse: { name: t.name, response: { result: t.content } } }]);
+    else {
+      const parts: GeminiPart[] = t.content ? [{ text: t.content }] : [];
+      for (const c of t.toolCalls ?? []) {
+        const sig = typeof c.meta?.thoughtSignature === 'string' ? c.meta.thoughtSignature : undefined;
+        parts.push({ functionCall: { name: c.name, args: c.args }, ...(sig && { thoughtSignature: sig }) });
+      }
+      if (parts.length) push('model', parts);
+    }
   }
   while (contents.length && contents[0].role !== 'user') contents.shift();
   return contents;
@@ -59,7 +80,7 @@ function readWithIdleTimeout(reader: ReadableStreamDefaultReader<Uint8Array>, ms
     timer = setTimeout(() => {
       // Reject BEFORE cancelling: cancel() resolves the pending read as "done", which would win the race and
       // make a stalled stream look like one that finished normally.
-      reject(new Error(`Gemini stream stalled (no data for ${ms}ms)`));
+      reject(new ProviderError('timeout', `Gemini stream stalled (no data for ${ms}ms)`));
       reader.cancel().catch(() => {});
     }, ms);
   });
@@ -78,13 +99,14 @@ function readWithIdleTimeout(reader: ReadableStreamDefaultReader<Uint8Array>, ms
  * `deadlineMs` in total, and an open stream that is silent for `idleMs` is cut off.
  */
 export function createGeminiProvider(cfg: GeminiConfig & { apiKey: string }, log: Logger): ProviderAdapter {
-  async function open(agent: ChatAgent, messages: HistoryMessage[], signal: AbortSignal): Promise<Response> {
+  async function open(req: ProviderRequest, signal: AbortSignal): Promise<Response> {
     // The key goes in a header (never the URL) so it can't leak into request logs.
     const headers = { 'x-goog-api-key': cfg.apiKey, 'Content-Type': 'application/json' };
     const body = JSON.stringify({
-      systemInstruction: { parts: [{ text: agent.systemPrompt }] },
-      ...(agent.temperature != null && { generationConfig: { temperature: agent.temperature } }),
-      contents: toGeminiContents(messages)
+      systemInstruction: { parts: [{ text: req.agent.systemPrompt }] },
+      ...(req.agent.temperature != null && { generationConfig: { temperature: req.agent.temperature } }),
+      contents: toGeminiContents(req.turns),
+      ...(req.tools?.length && { tools: [{ functionDeclarations: req.tools.map(t => ({ name: t.name, description: t.description, parameters: t.parameters })) }] })
     });
     const startedAt = Date.now();
     let lastError: Error | null = null;
@@ -93,7 +115,7 @@ export function createGeminiProvider(cfg: GeminiConfig & { apiKey: string }, log
       for (let attempt = 1; attempt <= cfg.attemptsPerModel; attempt++) {
         if (signal.aborted) throw new Error('aborted');
         const remaining = cfg.deadlineMs - (Date.now() - startedAt);
-        if (remaining <= 0) throw lastError ?? new Error('Gemini: out of time');
+        if (remaining <= 0) throw lastError ?? new ProviderError('timeout', 'Gemini: out of time');
         const timeoutMs = Math.min(cfg.timeoutMs, remaining);
         const at = { model, attempt, of: cfg.attemptsPerModel };
 
@@ -104,12 +126,12 @@ export function createGeminiProvider(cfg: GeminiConfig & { apiKey: string }, log
         } catch (err) {
           if (signal.aborted) throw err;
           if (err instanceof TimeoutError) {
-            lastError = new Error(`Gemini (${model}) gave no response within ${timeoutMs}ms`);
+            lastError = new ProviderError('timeout', `Gemini (${model}) gave no response within ${timeoutMs}ms`);
             log.warn(at, `gemini: no response within ${timeoutMs}ms, trying next model`);
             break; // don't wait on a model that is hanging; move to the next one
           }
           const message = err instanceof Error ? err.message : String(err);
-          lastError = new Error(`Gemini (${model}) network error: ${message}`);
+          lastError = new ProviderError('network', `Gemini (${model}) network error: ${message}`);
           log.warn(at, `gemini: network error ${message}`);
           if (attempt < cfg.attemptsPerModel) await sleep(cfg.retryDelayMs, signal);
           continue;
@@ -130,7 +152,7 @@ export function createGeminiProvider(cfg: GeminiConfig & { apiKey: string }, log
         let reason: string = detail;
         try { reason = JSON.parse(detail).error?.message || detail; } catch { /* not JSON: use the raw text */ }
         reason = String(reason).replace(/\s+/g, ' ').slice(0, 200);
-        lastError = new Error(`Gemini (${model}) responded ${res.status} ${reason}`);
+        lastError = new ProviderError(kindForStatus(res.status), `Gemini (${model}) responded ${res.status} ${reason}`, res.status);
         log.warn({ ...at, status: res.status }, `gemini: HTTP ${res.status} ${reason}`);
         if (RETRY_STATUSES.has(res.status)) {
           if (attempt < cfg.attemptsPerModel) await sleep(cfg.retryDelayMs, signal);
@@ -140,30 +162,42 @@ export function createGeminiProvider(cfg: GeminiConfig & { apiKey: string }, log
         throw lastError; // key / request problems are the same for every model
       }
     }
-    throw lastError ?? new Error('Gemini unavailable');
+    throw lastError ?? new ProviderError('unavailable', 'Gemini unavailable');
   }
 
   return {
     id: 'gemini',
     model: cfg.model,
-    async *stream(agent, messages, signal) {
-      const res = await open(agent, messages, signal);
+    capabilities: { streaming: true, tools: true },
+    async *run(req, signal): AsyncGenerator<ProviderEvent> {
+      const res = await open(req, signal);
       let yielded = false;
       let blockReason: string | null = null;
+      let usage: { inputTokens: number; outputTokens: number } | null = null;
+      let callIndex = 0;
 
-      function* handleLines(lines: string[]): Generator<string> {
+      function* handleLines(lines: string[]): Generator<ProviderEvent> {
         for (const raw of lines) {
           const line = raw.replace(/\r$/, ''); // Gemini's SSE uses CRLF
           if (!line.startsWith('data:')) continue;
           let chunk: GeminiChunk;
           try { chunk = JSON.parse(line.slice(5).trim()) as GeminiChunk; } catch { continue; } // ignore malformed lines
-          if (chunk.error) throw new Error(`Gemini error: ${String(chunk.error.message || '').slice(0, 200)}`);
+          if (chunk.error) throw new ProviderError('unavailable', `Gemini error: ${String(chunk.error.message || '').slice(0, 200)}`);
           if (chunk.promptFeedback?.blockReason) blockReason = chunk.promptFeedback.blockReason;
-          const text = (chunk.candidates?.[0]?.content?.parts ?? [])
-            .filter(p => !p.thought) // never show the model's internal reasoning
-            .map(p => p.text || '')
-            .join('');
-          if (text) { yielded = true; yield text; }
+          if (chunk.usageMetadata) {
+            const u = chunk.usageMetadata; // cumulative: the last one has the totals
+            usage = { inputTokens: u.promptTokenCount ?? 0, outputTokens: (u.candidatesTokenCount ?? 0) + (u.thoughtsTokenCount ?? 0) };
+          }
+          for (const p of chunk.candidates?.[0]?.content?.parts ?? []) {
+            if (p.thought) continue; // never show the model's internal reasoning
+            if (p.functionCall?.name) {
+              yielded = true;
+              yield {
+                type: 'tool_call',
+                call: { id: `gemini_${callIndex++}`, name: p.functionCall.name, args: p.functionCall.args ?? {}, ...(p.thoughtSignature && { meta: { thoughtSignature: p.thoughtSignature } }) }
+              };
+            } else if (p.text) { yielded = true; yield { type: 'text', text: p.text }; }
+          }
         }
       }
 
@@ -179,7 +213,8 @@ export function createGeminiProvider(cfg: GeminiConfig & { apiKey: string }, log
         yield* handleLines(lines);
       }
       yield* handleLines([buffer]);
-      if (!yielded) throw new Error(blockReason ? `Gemini blocked the prompt (${blockReason})` : 'Gemini returned no text');
+      if (usage) yield { type: 'usage', ...(usage as { inputTokens: number; outputTokens: number }) };
+      if (!yielded) throw blockReason ? new ProviderError('blocked', `Gemini blocked the prompt (${blockReason})`) : new ProviderError('empty', 'Gemini returned no text');
     }
   };
 }

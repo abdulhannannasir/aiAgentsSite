@@ -32,16 +32,19 @@ describe('OpenAI provider', () => {
     expect(upstream.calls[0].url).toBe('/chat/completions');
     expect(upstream.calls[0].headers.authorization).toBe('Bearer sk-test');
     expect(JSON.parse(upstream.calls[0].body)).toEqual({
-      model: 'gpt-test', stream: true, temperature: 0.2,
+      model: 'gpt-test', stream: true, stream_options: { include_usage: true }, temperature: 0.2,
       messages: [{ role: 'system', content: 'Be brief' }, { role: 'user', content: 'earlier' }, { role: 'assistant', content: 'reply' }, { role: 'user', content: 'hi' }]
     });
   });
 
-  it('falls back to the labelled demo reply when the provider fails before any text (plain chat)', async () => {
-    const { app } = await setup([(_req, _body, res) => json(res, 401, { error: { message: 'bad key' } })], url => ({ OPENAI_API_KEY: 'sk-bad', OPENAI_BASE_URL: url }));
+  it('reports a provider failure honestly in live mode (no canned demo text), with a user-safe reason', async () => {
+    const { app } = await setup([(_req, _body, res) => json(res, 401, { error: { message: 'bad key sk-secret' } })], url => ({ OPENAI_API_KEY: 'sk-bad', OPENAI_BASE_URL: url }));
     const r = await chat(app.url, { agentId: 'translator', message: 'hi' });
-    expect(r.text).toMatch(/Demo mode/);
-    expect(r.events.at(-1)?.type).toBe('done');
+    expect(r.text).toBe('');
+    const err = r.events.find(e => e.type === 'error') as { content: string };
+    expect(err.content).toMatch(/rejected the server's credentials/);
+    expect(err.content).not.toMatch(/sk-secret|401/); // provider details stay in the logs
+    expect(r.events.at(-1)).toEqual({ type: 'done', message: null });
   });
 
   it('fails a workflow step honestly instead of inventing output', async () => {

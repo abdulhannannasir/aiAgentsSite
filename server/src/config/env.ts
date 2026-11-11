@@ -39,6 +39,8 @@ const EnvSchema = z.object({
 
   OPENAI_API_KEY: optionalString,
   OPENAI_MODEL: z.preprocess(blankToUndefined, z.string().default('gpt-4o-mini')),
+  // Models agents may be pinned to (comma-separated). Default: just OPENAI_MODEL.
+  OPENAI_MODELS: optionalString,
   OPENAI_BASE_URL: z.preprocess(blankToUndefined, z.string().url().default('https://api.openai.com/v1')).transform(stripSlash),
 
   GEMINI_API_KEY: optionalString,
@@ -46,10 +48,16 @@ const EnvSchema = z.object({
   GEMINI_BASE_URL: z.preprocess(blankToUndefined, z.string().url().default('https://generativelanguage.googleapis.com/v1beta')).transform(stripSlash),
   // Unset = default backups; set to an empty string = no backups.
   GEMINI_FALLBACK_MODELS: z.string().optional(),
+  // Models agents may be pinned to (comma-separated). Default: GEMINI_MODEL and its backups.
+  GEMINI_MODELS: optionalString,
   GEMINI_RETRY_DELAY_MS: num(400),
   GEMINI_TIMEOUT_MS: num(8000),
   GEMINI_DEADLINE_MS: num(16000),
   GEMINI_IDLE_MS: num(30000),
+
+  // Tools. Web search uses the Tavily Search API; without a key the tool is listed as awaiting configuration.
+  TAVILY_API_KEY: optionalString,
+  TAVILY_BASE_URL: z.preprocess(blankToUndefined, z.string().url().optional()),
 
   RATE_LIMIT_MAX: num(20),
   RATE_LIMIT_WINDOW_MS: num(60_000),
@@ -71,6 +79,8 @@ const EnvSchema = z.object({
 export interface GeminiConfig {
   apiKey: string | null;
   model: string;
+  /** Raw GEMINI_MODELS: models agents may be pinned to. */
+  selectableModels?: string;
   /** Primary model first, then the backups, without duplicates. */
   models: string[];
   baseUrl: string;
@@ -88,7 +98,8 @@ export interface AppConfig {
   corsOrigins: string[];
   trustProxy: number;
   provider: ProviderId;
-  openai: { apiKey: string | null; model: string; baseUrl: string };
+  openai: { apiKey: string | null; model: string; baseUrl: string; models?: string };
+  tools: { tavilyApiKey: string | null; tavilyBaseUrl?: string };
   gemini: GeminiConfig;
   limits: {
     maxMessageChars: number;
@@ -143,10 +154,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     corsOrigins: (e.CORS_ORIGINS ?? '').split(',').map(s => stripSlash(s.trim())).filter(Boolean),
     trustProxy: e.TRUST_PROXY,
     provider: pickProvider(e.LLM_PROVIDER, e.OPENAI_API_KEY, e.GEMINI_API_KEY),
-    openai: { apiKey: e.OPENAI_API_KEY ?? null, model: e.OPENAI_MODEL, baseUrl: e.OPENAI_BASE_URL },
+    openai: { apiKey: e.OPENAI_API_KEY ?? null, model: e.OPENAI_MODEL, baseUrl: e.OPENAI_BASE_URL, models: e.OPENAI_MODELS },
+    tools: { tavilyApiKey: e.TAVILY_API_KEY ?? null, tavilyBaseUrl: e.TAVILY_BASE_URL },
     gemini: {
       apiKey: e.GEMINI_API_KEY ?? null,
       model: e.GEMINI_MODEL,
+      selectableModels: e.GEMINI_MODELS,
       models: [e.GEMINI_MODEL, ...fallbacks.filter(m => m !== e.GEMINI_MODEL)],
       baseUrl: e.GEMINI_BASE_URL,
       attemptsPerModel: 2,

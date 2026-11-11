@@ -329,11 +329,34 @@ model AgentExecution {
 
   message Message?
   usage   UsageRecord[]
+  tools   ToolInvocation[]
 
   @@index([workspaceId, createdAt(sort: Desc)])
   @@index([workspaceId, status])
   @@index([agentKey, createdAt])
   @@map("agent_executions")
+}
+
+enum ToolInvocationStatus {
+  SUCCEEDED
+  FAILED
+}
+
+/// One tool call made during an execution: what was asked, what came back (shortened), how long it took.
+model ToolInvocation {
+  id          String               @id @default(cuid())
+  executionId String
+  execution   AgentExecution       @relation(fields: [executionId], references: [id], onDelete: Cascade)
+  toolId      String
+  input       Json
+  status      ToolInvocationStatus
+  summary     String
+  durationMs  Int
+  createdAt   DateTime             @default(now())
+
+  @@index([executionId, createdAt])
+  @@index([toolId, createdAt])
+  @@map("tool_invocations")
 }
 
 enum UsageKind {

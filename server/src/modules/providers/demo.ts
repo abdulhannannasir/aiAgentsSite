@@ -3,13 +3,13 @@ import type { ChatAgent } from './types.js';
 export const DEMO_NOTE = '_Demo mode — replies are canned. Set `GEMINI_API_KEY` or `OPENAI_API_KEY` on the server for real answers._';
 
 /**
- * The canned reply for demo mode: the agent's greeting plus a clear demo label. It deliberately does not
- * pretend to run tools (the original demo printed fake "ticket created" / "email sent" results).
+ * The canned reply for demo mode: the agent's greeting plus a clear demo label. No model runs in demo mode, so no
+ * tools run either, and the reply says so (the original demo printed fake "ticket created" / "email sent" results).
  */
 export function buildDemoResponse(agent: ChatAgent): string {
   const intro = agent.greeting || `Hello! I'm your ${agent.name}. ${agent.description ?? ''}`.trim();
   const tools = agent.tools.length
-    ? `\n\nThis agent is set up for: ${agent.tools.map(t => `\`${t}\``).join(', ')}. Tools are not connected yet, so none were run.`
+    ? `\n\nThis agent may use: ${agent.tools.map(t => `\`${t}\``).join(', ')}. Tools only run with a real model, so none were run here.`
     : '';
   return `${intro}${tools}\n\n${DEMO_NOTE}`;
 }

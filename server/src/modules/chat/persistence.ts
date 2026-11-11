@@ -70,6 +70,10 @@ export interface RunEnd {
   modelCalls: number;
   provider: string;
   model: string | null;
+  /** As reported by the provider; null when it reported nothing (never estimated). */
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  tools?: Array<{ toolId: string; input: Record<string, unknown>; ok: boolean; summary: string; durationMs: number }>;
 }
 
 /** Stores the reply, closes the execution and meters usage. Runs even if the client disconnected. */
@@ -78,8 +82,17 @@ export async function finishRun(db: Db, ctx: AuthContext, run: Run, e: RunEnd): 
   await db.$transaction([
     db.agentExecution.update({
       where: { id: run.executionId },
-      data: { status: e.status, output: e.output || null, error: e.error ?? null, modelCalls: e.modelCalls, endedAt: new Date() }
+      data: {
+        status: e.status, output: e.output || null, error: e.error ?? null, modelCalls: e.modelCalls, endedAt: new Date(),
+        inputTokens: e.inputTokens ?? null, outputTokens: e.outputTokens ?? null
+      }
     }),
+    ...(e.tools?.length ? [db.toolInvocation.createMany({
+      data: e.tools.map(t => ({
+        executionId: run.executionId, toolId: t.toolId, input: t.input as Prisma.InputJsonValue,
+        status: t.ok ? 'SUCCEEDED' as const : 'FAILED' as const, summary: t.summary, durationMs: t.durationMs
+      }))
+    })] : []),
     ...(keepReply ? [db.message.create({
       data: {
         conversationId: run.conversationId, role: 'ASSISTANT', content: e.output, executionId: run.executionId,
@@ -90,6 +103,12 @@ export async function finishRun(db: Db, ctx: AuthContext, run: Run, e: RunEnd): 
     db.conversation.update({ where: { id: run.conversationId }, data: { updatedAt: new Date() } }),
     ...(e.modelCalls > 0 ? [db.usageRecord.create({
       data: { workspaceId: ctx.workspaceId, userId: ctx.user.id, kind: 'AI_REQUEST', quantity: e.modelCalls, provider: e.provider, model: e.model, executionId: run.executionId }
+    })] : []),
+    ...(e.inputTokens != null ? [db.usageRecord.create({
+      data: { workspaceId: ctx.workspaceId, userId: ctx.user.id, kind: 'INPUT_TOKENS', quantity: e.inputTokens, provider: e.provider, model: e.model, executionId: run.executionId }
+    })] : []),
+    ...(e.outputTokens != null ? [db.usageRecord.create({
+      data: { workspaceId: ctx.workspaceId, userId: ctx.user.id, kind: 'OUTPUT_TOKENS', quantity: e.outputTokens, provider: e.provider, model: e.model, executionId: run.executionId }
     })] : []),
     ...(e.workflowId ? [db.usageRecord.create({
       data: { workspaceId: ctx.workspaceId, userId: ctx.user.id, kind: 'WORKFLOW_RUN', quantity: 1, provider: e.provider, model: e.model, executionId: run.executionId }

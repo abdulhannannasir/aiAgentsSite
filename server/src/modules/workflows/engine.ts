@@ -2,6 +2,19 @@ import type { ChatEvent, PublicWorkflow } from '../../contracts.js';
 import type { Logger } from '../../lib/logger.js';
 import { findAgent, type AgentDefinition } from '../agents/registry.js';
 import type { LLMService } from '../providers/llm.js';
+import { ProviderError } from '../providers/types.js';
+
+/** Model calls and tokens used by a run, filled in as it goes. Tokens stay null when the provider reports none. */
+export interface Meter {
+  modelCalls: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+export const newMeter = (): Meter => ({ modelCalls: 0, inputTokens: null, outputTokens: null });
+export function addUsage(m: Meter, input: number, output: number): void {
+  m.inputTokens = (m.inputTokens ?? 0) + input;
+  m.outputTokens = (m.outputTokens ?? 0) + output;
+}
 import { WORKFLOWS, type WorkflowDefinition, type WorkflowStepDefinition } from './definitions.js';
 
 /** Fails fast at startup if a workflow points at an agent that does not exist. */
@@ -52,7 +65,7 @@ function demoStepText(workflow: WorkflowDefinition, step: WorkflowStepDefinition
  */
 export async function* runWorkflow(
   workflow: WorkflowDefinition, task: string, signal: AbortSignal,
-  deps: { llm: LLMService; log: Logger; maxStepContextChars: number }
+  deps: { llm: LLMService; log: Logger; maxStepContextChars: number; meter: Meter }
 ): AsyncGenerator<ChatEvent> {
   const steps = workflow.steps.map(s => ({ ...s, agent: findAgent(s.agentId)! }));
   yield {
@@ -72,20 +85,31 @@ export async function* runWorkflow(
     };
     let text = '';
     try {
-      const source = deps.llm.provider === 'demo'
-        ? deps.llm.demoText(demoStepText(workflow, s, s.agent, task, isFinal), signal)
-        : deps.llm.complete(stepAgent, [{ role: 'user', content: buildStepPrompt(task, outputs, deps.maxStepContextChars) }], signal, { strict: true });
-      for await (const chunk of source) {
-        if (signal.aborted) return;
-        text += chunk;
-        yield isFinal ? { type: 'stream', content: chunk } : { type: 'step_delta', id: s.id, content: chunk };
+      if (deps.llm.provider === 'demo') {
+        for await (const chunk of deps.llm.demoText(demoStepText(workflow, s, s.agent, task, isFinal), signal)) {
+          if (signal.aborted) return;
+          text += chunk;
+          yield isFinal ? { type: 'stream', content: chunk } : { type: 'step_delta', id: s.id, content: chunk };
+        }
+      } else {
+        const history = [{ role: 'user' as const, content: buildStepPrompt(task, outputs, deps.maxStepContextChars) }];
+        for await (const ev of deps.llm.run({ agent: stepAgent, history, signal, useTools: false })) {
+          if (signal.aborted) return;
+          if (ev.type === 'model_call') deps.meter.modelCalls++;
+          else if (ev.type === 'usage') addUsage(deps.meter, ev.inputTokens, ev.outputTokens);
+          else if (ev.type === 'text') {
+            text += ev.text;
+            yield isFinal ? { type: 'stream', content: ev.text } : { type: 'step_delta', id: s.id, content: ev.text };
+          }
+        }
       }
-      if (!text.trim()) throw new Error('empty step output');
+      if (!text.trim()) throw new ProviderError('empty', 'empty step output');
     } catch (err) {
       if (signal.aborted) return;
       deps.log.error({ workflow: workflow.id, step: s.id, err: err instanceof Error ? err.message : String(err) }, 'workflow step failed');
+      const why = err instanceof ProviderError ? ` ${err.userMessage}` : '';
       yield { type: 'step', id: s.id, status: 'error', error: 'This step failed.' };
-      yield { type: 'error', content: `The ${s.role} step failed, so the workflow stopped. Please try again.` };
+      yield { type: 'error', content: `The ${s.role} step failed, so the workflow stopped.${why || ' Please try again.'}` };
       return;
     }
     outputs.push({ role: s.role, agentName: s.agent.name, text });
