@@ -18,7 +18,7 @@ const PAGES = [
   ['builder', 'Agent Builder'], ['workflows', 'Workflows'], ['projects', 'Projects'], ['memory', 'Memory'],
   ['integrations', 'Integrations'], ['activity', 'Activity'], ['analytics', 'Analytics'], ['settings', 'Settings'], ['billing', 'Billing']
 ];
-const PLANNED = new Set(['projects', 'memory', 'integrations', 'activity', 'analytics', 'billing']);
+const PLANNED = new Set(['projects', 'memory', 'integrations', 'analytics', 'billing']);
 const href = id => (id === 'chat' ? '#/app' : `#/app/${id}`);
 
 const browser = await chromium.launch();
@@ -107,8 +107,8 @@ await page.getByRole('button', { name: 'Clear filters' }).click();
 await page.getByRole('link', { name: 'Details for Full-Stack Coding Assistant' }).click();
 await page.getByTestId('agent-detail-page').waitFor();
 const detailText = await page.getByTestId('agent-detail-page').textContent();
-check('agent detail page: own URL, tools labelled not connected, workflows, example prompts',
-  page.url().endsWith('#/app/agent/coding-assistant') && /not connected/.test(detailText) && /Code Review/.test(detailText) && (await page.getByTestId('example-prompts').locator('button').count()) >= 2);
+check('agent detail page: own URL, tool availability on this server, workflows, example prompts',
+  page.url().endsWith('#/app/agent/coding-assistant') && /Not on this server: Code interpreter/.test(detailText) && /Code Review/.test(detailText) && (await page.getByTestId('example-prompts').locator('button').count()) >= 2);
 check('agent detail page on a server without a database: no invented numbers, it says why', await page.getByTestId('stats-unavailable').isVisible() && (await page.getByTestId('agent-stats').count()) === 0);
 check('agent detail page sets the tab title to the agent', (await page.title()).startsWith('Full-Stack Coding Assistant'));
 await shot(page, 's04-agent-detail');

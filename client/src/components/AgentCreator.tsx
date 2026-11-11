@@ -5,13 +5,10 @@ import { Modal } from './Modal';
 import { useToast } from './Toast';
 import { LIMITS, MAX_AGENT_FILE_BYTES, parseAgentFile, validateDraft } from '../lib/agentFile';
 import { AGENT_TEMPLATES } from '../lib/templates';
+import { TOOL_LABEL, type ModelCatalog, type ToolInfo } from '../lib/tools';
 import { TOOL_IDS, type AgentDraft, type ToolId } from '../types';
 
 const EMOJI = ['🤖', '🧠', '⚖️', '🐞', '🔎', '📈', '✍️', '🎨', '🛠️', '🎓', '🩺', '🚀', '🧾', '🌍'];
-const TOOL_LABEL: Record<ToolId, string> = {
-  web_search: 'Web search', code_interpreter: 'Code interpreter', file_reader: 'File reader', ticket_system: 'Ticket system',
-  email_sender: 'Email sender', knowledge_base: 'Knowledge base', calculator: 'Calculator'
-};
 
 interface Props {
   open: boolean;
@@ -23,9 +20,13 @@ interface Props {
   onSave: (draft: AgentDraft) => void;
   onDelete?: () => void;
   onExport: (draft: AgentDraft) => void;
+  /** What each tool can do on this server (from /api/v1/tools); unknown = no availability notes. */
+  toolInfo?: ToolInfo[];
+  /** Signed in with models configured: offer a model choice. Null hides it (guests use the server default). */
+  models?: ModelCatalog | null;
 }
 
-function Form({ initial, initialWarnings = [], editing, onClose, onSave, onDelete, onExport }: Omit<Props, 'open'>) {
+function Form({ initial, initialWarnings = [], editing, onClose, onSave, onDelete, onExport, toolInfo, models }: Omit<Props, 'open'>) {
   const { toast } = useToast();
   const ids = useId();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -163,20 +164,48 @@ function Form({ initial, initialWarnings = [], editing, onClose, onSave, onDelet
           <div className="flex justify-between text-[11px] text-muted"><span>Precise</span><span>Balanced</span><span>Creative</span></div>
         </div>
 
+        {models && models.providers.some(p => p.models.length > 0) && (
+          <div>
+            <label htmlFor={`${ids}-model`} className="mb-1 block text-xs font-semibold">Model</label>
+            <select id={`${ids}-model`} value={draft.provider && draft.model ? `${draft.provider}|${draft.model}` : ''}
+              onChange={e => {
+                const [provider, model] = e.target.value ? e.target.value.split('|') : [null, null];
+                setDraft(d => ({ ...d, provider: provider as AgentDraft['provider'], model }));
+              }}
+              className={fieldCls(undefined)}>
+              <option value="">Server default{models.default ? ` (${models.default.model})` : ''}</option>
+              {models.providers.filter(p => p.models.length).map(p => (
+                <optgroup key={p.id} label={p.label}>
+                  {p.models.map(m => <option key={m.id} value={`${p.id}|${m.id}`}>{m.id}</option>)}
+                </optgroup>
+              ))}
+            </select>
+            <p className="mt-1 text-[11px] text-muted">Each saved change is a new version, so past replies stay traceable to the model that wrote them.</p>
+          </div>
+        )}
+
         <fieldset>
           <legend className="mb-1 text-xs font-semibold">Tool permissions</legend>
-          <p className="mb-2 text-[11px] text-muted">Tools are simulated in this demo: permissions are saved and exported, but nothing is actually searched, run or sent.</p>
+          <p className="mb-2 text-[11px] text-muted">The agent may call the tools you tick, but only those available on this server; tools only run with a real model, never in demo mode.</p>
           <div className="flex flex-wrap gap-2">
             {TOOL_IDS.map(tool => {
               const on = draft.tools.includes(tool);
+              const info = toolInfo?.find(t => t.id === tool);
+              const off = info && !info.available;
               return (
-                <label key={tool} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition hover:bg-hover ${on ? 'border-accent bg-accent/10' : 'border-line'}`}>
+                <label key={tool} title={off ? info.reason : info?.description} className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs transition hover:bg-hover ${on ? 'border-accent bg-accent/10' : 'border-line'}`}>
                   <input type="checkbox" checked={on} onChange={() => set('tools', on ? draft.tools.filter(t => t !== tool) : [...draft.tools, tool])} className="accent-[rgb(var(--accent))]" />
                   {TOOL_LABEL[tool]}
+                  {off && <span className="rounded bg-hover px-1 font-mono text-[9px] uppercase text-muted">not on this server</span>}
                 </label>
               );
             })}
           </div>
+          {toolInfo?.some(t => !t.available && draft.tools.includes(t.id as ToolId)) && (
+            <p className="mt-2 text-[11px] text-muted" data-testid="unavailable-tools-note">
+              {toolInfo.filter(t => !t.available && draft.tools.includes(t.id as ToolId)).map(t => `${t.label}: ${t.reason}`).join(' ')}
+            </p>
+          )}
         </fieldset>
       </div>
 

@@ -10,13 +10,10 @@ import { ApiError } from '../lib/api';
 import { fetchAgentDetail, formatCount, marketplace, type MarketplaceDetail } from '../lib/marketplace';
 import { authHref, pageHref } from '../lib/route';
 import { timeAgo } from '../lib/sessionStats';
+import { toolLabel } from '../lib/tools';
 import { useWorkspace } from '../app/workspace';
 import type { PublicAgentDetail } from '../../../server/src/contracts';
 
-const TOOL_LABEL: Record<string, string> = {
-  web_search: 'Web search', code_interpreter: 'Code interpreter', file_reader: 'File reader', ticket_system: 'Ticket system',
-  email_sender: 'Email sender', knowledge_base: 'Knowledge base', calculator: 'Calculator'
-};
 
 /** Read-only stars, with the number as text for screen readers. */
 export function Stars({ value, size = 14 }: { value: number; size?: number }) {
@@ -205,11 +202,20 @@ export default function AgentDetailPage({ agentId }: { agentId: string }) {
           <Card as="section" aria-labelledby="ad-config">
             <CardTitle id="ad-config">Configuration</CardTitle>
             <dl className="flex flex-col gap-3 text-sm">
-              <div><dt className="text-xs text-muted">Model</dt><dd>{provider}</dd><dd className="text-xs text-muted">The server's default; per-agent model choice arrives in Phase 4.</dd></div>
+              <div><dt className="text-xs text-muted">Model</dt><dd>{provider}</dd><dd className="text-xs text-muted">Built-in agents use the server's default. Your own agents can be pinned to a model.</dd></div>
               <div>
                 <dt className="text-xs text-muted">Tool permissions</dt>
-                <dd className="mt-1 flex flex-wrap gap-1.5">{agent.tools.length ? agent.tools.map(t => <Badge key={t}>{TOOL_LABEL[t] ?? t}</Badge>) : <span className="text-muted">None</span>}</dd>
-                {agent.tools.length > 0 && <dd className="mt-1 text-xs text-muted">Labels only: tools are not connected yet.</dd>}
+                <dd className="mt-1 flex flex-wrap gap-1.5">{agent.tools.length ? agent.tools.map(t => <Badge key={t}>{toolLabel(t)}</Badge>) : <span className="text-muted">None</span>}</dd>
+                {agent.tools.length > 0 && (
+                  <dd className="mt-1 text-xs text-muted">
+                    {ws.toolInfo
+                      ? (() => {
+                          const off = agent.tools.map(t => ws.toolInfo!.find(i => i.id === t)).filter(i => i && !i.available);
+                          return off.length ? `Not on this server: ${off.map(i => `${i!.label} (${i!.reason})`).join('; ')}` : 'All available on this server. Tools only run with a real model.';
+                        })()
+                      : 'Tools only run with a real model.'}
+                  </dd>
+                )}
               </div>
               <div><dt className="text-xs text-muted">Input</dt><dd>Plain text, up to 4,000 characters per message.</dd></div>
               <div><dt className="text-xs text-muted">Output</dt><dd>Markdown (headings, lists, tables, code).</dd></div>

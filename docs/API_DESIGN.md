@@ -111,6 +111,20 @@ The marketplace needs a database; without one these answer 503 `FEATURE_UNAVAILA
 | PUT / DELETE | `/api/v1/marketplace/favorites/:key` | ✓ | `key` = built-in id or `custom:<id>` of a saved agent you can see (404 otherwise); idempotent |
 | GET | `/api/v1/custom-agents/:id/versions` | ✓ | (Phase 2) now shown in the UI as version history |
 
+### Phase 4 (execution engine) — implemented
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| GET | `/api/v1/models` | – | `{ default, providers: [{ id, label, configured, models: [{ id, isDefault, capabilities }] }] }` — the models a saved agent may be pinned to |
+| GET | `/api/v1/tools` | – | every tool with `available` and, if not, the `reason` |
+| GET | `/api/v1/executions` | ✓ | `?status=&limit=&before=`; members see their own runs, owners/admins the workspace's |
+| GET | `/api/v1/executions/:id` | ✓ | input, output, provider/model, agent version, model calls, tokens, tool invocations, `running` |
+| POST | `/api/v1/executions/:id/cancel` | ✓ | starter or admin; 202 when stopped, 409 when already ended or running on another instance |
+
+Saved agents accept `provider` + `model` (both or neither; must be listed in `/models`). Chat SSE gains
+`{ type: 'tool', id, tool, label, status: running|done|error, input?, summary?, durationMs? }`, and the signed-in
+`conversation` event carries `executionId`. Provider failures arrive as `error` events with a user-safe message.
+
 ### Later phases (shape reserved)
 
 `/api/v1/executions` (list, get, cancel, events SSE) · `/api/v1/tools` · `/api/v1/orchestrations` ·

@@ -69,7 +69,7 @@ history. The custom-agent domain model is `Agent` (one row per agent, `visibilit
 | Phase | Models |
 | --- | --- |
 | 3 ✅ | `AgentFavorite` (unique userId+agentKey), `AgentReview` (rating 1–5, unique userId+agentKey) — migration `20261109003328_marketplace`, plus an index on `agent_executions(agentKey, createdAt)` for usage stats. Built-in agents stay defined in code and are referenced by `agentKey`; they are not copied into the database. |
-| 4 | `ExecutionLog` (executionId, level, event, data, at), `ToolInvocation` (executionId, toolId, input, output, status, durationMs) |
+| 4 ✅ | `ToolInvocation` (executionId, toolId, input JSON, status SUCCEEDED/FAILED, summary, durationMs) — migration `20261111090513_tool_invocations`. Token counts live on `AgentExecution` and as `INPUT_TOKENS`/`OUTPUT_TOKENS` usage records (only when the provider reports them). A separate `ExecutionLog` table was not needed yet; structured logs carry the per-call detail. |
 | 5 | `Task` (workflowExecutionId/executionId, parentId, agentId, status, dependsOn[], attempt, idempotencyKey unique, result JSON) , `ApprovalRequest` |
 | 6 | `Workflow`, `WorkflowVersion` (graph JSON validated by zod), `WorkflowExecution`, `WorkflowNodeRun` |
 | 7 | `Project`, `ProjectMember`, `ProjectFile` (storageKey, mime, size, sha256, extractedText), `MemoryRecord` (scope enum user/project/conversation/agent/knowledge, content, embedding `vector(1536)`, sourceId, expiresAt) with HNSW index |

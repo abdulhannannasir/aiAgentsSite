@@ -60,9 +60,24 @@ export default function SettingsPage() {
                   </li>
                 ))}
               </ul>
-              <p className="mt-2 text-xs text-muted">Keys live on the server only and are never sent to the browser. Per-agent provider and model choice arrives in Phase 4.</p>
+              <p className="mt-2 text-xs text-muted">Keys live on the server only and are never sent to the browser. Saved agents can be pinned to any model listed in the agent editor.</p>
             </>
           )}
+        </Card>
+
+        <Card as="section" aria-labelledby="set-tools">
+          <CardTitle id="set-tools">Tools</CardTitle>
+          {!ws.toolInfo ? <p className="text-sm text-muted">Tool status is unavailable from this server.</p> : (
+            <ul className="flex flex-col gap-2" data-testid="settings-tools">
+              {ws.toolInfo.map(t => (
+                <li key={t.id} className="flex items-start justify-between gap-3 text-sm">
+                  <span className="min-w-0"><span className="block">{t.label}</span>{!t.available && t.reason && <span className="block text-xs text-muted">{t.reason}</span>}</span>
+                  <Badge tone={t.available ? 'success' : 'neutral'}>{t.available ? 'Available' : 'Unavailable'}</Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-2 text-xs text-muted">Agents only call the tools they are permitted, and only with a real model. Every call is shown in the reply's thought stream and, for signed-in users, recorded in Activity.</p>
         </Card>
 
         <Card as="section" aria-labelledby="set-services">

@@ -82,6 +82,17 @@ export function useChat() {
         case 'conversation':
           conversationIds.current.set(key, e.id);
           break;
+        case 'tool':
+          patchReply(key, replyId, m => {
+            const id = `tool:${e.id}`;
+            const trace = m.trace ?? [];
+            if (e.status === 'running') {
+              const input = Object.entries(e.input ?? {}).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`).join(', ').slice(0, 120);
+              return { ...m, trace: [...trace, { id, kind: 'tool', agentName: e.label, agentIcon: '🛠️', role: 'Tool', label: input || e.label, status: 'active', output: '', startedAt: Date.now() }] };
+            }
+            return { ...m, trace: trace.map(s => (s.id === id ? { ...s, status: e.status === 'done' ? 'complete' : 'error', output: e.summary ?? '', endedAt: Date.now() } : s)) };
+          });
+          break;
         case 'plan':
           patchReply(key, replyId, m => ({ ...m, trace: e.steps.map(s => ({ ...s, output: '' })) }));
           break;

@@ -5,7 +5,23 @@
 - `/` is the landing page. `/#/app` is the chat workspace, and `/#/app/<page>` the other app pages: Command Center, Discover Agents, My Agents, Agent Builder, Workflows and Settings, plus clearly labelled planned modules (Projects, Memory, Integrations, Activity, Analytics, Billing) that say which roadmap phase builds them. Hash routing, so no server rewrites are needed.
 
 - **Demo mode** (default): works instantly with no API key. Replies are canned text and simulated workflow steps.
-- **Live mode**: set `GEMINI_API_KEY` (Google Gemini) or `OPENAI_API_KEY` (OpenAI) and every agent answers with a real model, streamed token by token.
+- **Live mode**: set `GEMINI_API_KEY` (Google Gemini) or `OPENAI_API_KEY` (OpenAI) and every agent answers with a real model, streamed token by token, calling real tools when it is permitted to (see **Tools**). If the provider fails, the user sees an honest error, never canned text.
+
+## Tools
+
+Agents carry tool permissions; a tool is offered to the model only if the agent is permitted **and** the tool is available on the server (`GET /api/v1/tools` lists every tool and why any is unavailable). Every call shows up in the reply's thought stream and, for signed-in users, in **Activity** with its input, result and duration.
+
+| Tool | Status |
+| --- | --- |
+| `calculator` | Available — exact arithmetic with a safe parser (no `eval`). |
+| `current_time` | Available — current date/time in UTC and any IANA zone. |
+| `url_fetch` | Available — reads public web pages: http/https on ports 80/443 only, every address checked against private/loopback/link-local/metadata ranges at connection time (so DNS rebinding can't sneak past) and again on each redirect, 2 MB / 15 s limits, text extracted and labelled as untrusted for the model. |
+| `web_search` | Awaiting configuration — set `TAVILY_API_KEY`. |
+| `code_interpreter` | Unavailable — needs an isolated sandbox; code never runs on the API server. |
+| `file_reader`, `knowledge_base` | Unavailable — arrive with project files and memory (Phase 7). |
+| `ticket_system`, `email_sender` | Unavailable — need a connected integration and approvals (Phases 5 and 8). |
+
+A reply may use up to four rounds of tool calls; each extra model call counts against the rate limit. Tools only run with a real model, never in demo mode.
 
 ## Accounts and workspaces (optional)
 
@@ -150,6 +166,9 @@ BASE_URL=http://127.0.0.1:3801 node e2e/shell.mjs
 # accounts: a server with a database (see the header of e2e/accounts.mjs)
 BASE_URL=http://127.0.0.1:3802 SERVER_LOG=/tmp/agentverse-e2e.log node e2e/accounts.mjs
 BASE_URL=http://127.0.0.1:3802 node e2e/marketplace.mjs
+# live mode against a fake OpenAI (see the header of e2e/tools.mjs)
+node e2e/mock-openai.mjs 3901 &
+BASE_URL=http://127.0.0.1:3803 node e2e/tools.mjs
 ```
 
 ## Configuration
@@ -165,6 +184,8 @@ BASE_URL=http://127.0.0.1:3802 node e2e/marketplace.mjs
 | `OPENAI_MODEL` | `gpt-4o-mini` | Any chat-completions model your key can use. |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Point at any OpenAI-compatible API. |
 | `LLM_PROVIDER` | _(auto)_ | `gemini`, `openai` or `demo` to force one provider. |
+| `OPENAI_MODELS` / `GEMINI_MODELS` | the default model (+ Gemini backups) | Models a saved agent may be pinned to (comma-separated). Listed at `GET /api/v1/models`. |
+| `TAVILY_API_KEY` | _(empty)_ | Enables the `web_search` tool (Tavily Search API). |
 | `CORS_ORIGINS` | _(empty)_ | Other sites allowed to call the API (comma-separated). Empty = same-origin only. |
 | `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` | `20` / `60000` | Chat requests per IP per window. |
 | `LOG_LEVEL` | `info` | pino log level (logs are JSON, secrets redacted). |
@@ -174,7 +195,7 @@ BASE_URL=http://127.0.0.1:3802 node e2e/marketplace.mjs
 | `SMTP_URL` / `MAIL_FROM` | _(empty)_ | Email delivery for verification and password reset. |
 | `REQUIRE_EMAIL_VERIFICATION` | `true` if SMTP is set | Require a confirmed email before first sign-in. |
 
-With no key the app runs in demo mode. If both keys are set it uses OpenAI unless `LLM_PROVIDER=gemini`. A plain chat reply that fails before any text is sent (bad key, quota, blocked prompt) falls back to demo text; a **workflow step** that fails is reported as Failed instead. `/api/health` reports the active provider.
+With no key the app runs in demo mode. If both keys are set it uses OpenAI unless `LLM_PROVIDER=gemini`. A reply that fails (bad key, quota, blocked prompt, timeout) is reported as an error with a user-safe reason; a **workflow step** that fails is reported as Failed and stops the run. `/api/health` reports the active provider.
 
 Built-in limits: 20 chat requests per minute per IP (best-effort, see below), 4,000 characters per new message, and the last 20 earlier messages (8,000 characters each) sent as context. A workflow counts as one request per step.
 
@@ -266,6 +287,6 @@ The image is multi-stage: the React app is built in one stage and only the serve
 
 - **Guests' conversations live in the browser tab.** Refreshing ends them and custom agents persist in that browser only. With a database configured, signed-in users' agents and chats are saved on the server.
 - **Live mode costs money.** Anyone who can reach your site can spend your model credits, and a workflow makes several model calls. Use a hard limit at your host and a quota or spending cap with your model provider.
-- **Tools are not connected yet.** An agent's tools (`web_search`, `ticket_system`, `email_sender`, …) are permission labels; nothing is searched, sent or created. Demo replies say so instead of printing fake results. Real, permissioned tools arrive with the Phase 4 tool registry (see `docs/IMPLEMENTATION_ROADMAP.md`).
+- **Only some tools exist yet.** Calculator, date/time and reading public web pages work (web search with a Tavily key). Email, tickets, files, knowledge and code execution are listed as unavailable and are never pretended.
 - **Legal, finance and health agents** are chat templates, not professional advice.
 - **Free tiers sleep.** Free web services may spin down when idle, so the first visit can be slow.

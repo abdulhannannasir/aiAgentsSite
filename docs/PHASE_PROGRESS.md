@@ -8,12 +8,12 @@ Single source of truth for where the 12-phase build stands. Updated at the end o
 | 1 | UI architecture and design system | ✅ Done |
 | 2 | Auth, database, user management | ✅ Done (team invitations UI deferred, see below) |
 | 3 | Agent marketplace | ✅ Done (per-agent model choice moves to Phase 4, see below) |
-| 4 | Real AI execution engine | ⚪ Not started (OpenAI/Gemini streaming exist from before) |
+| 4 | Real AI execution engine | ✅ Done (sandboxed code execution deliberately not offered, see below) |
 | 5 | Multi-agent orchestration | ⚪ Not started (4 sequential workflows exist from before) |
 | 6 | Visual workflow studio | ⚪ Not started |
 | 7 | Projects, memory, knowledge | ⚪ Not started |
 | 8 | Integrations | ⚪ Not started |
-| 9 | Command Center and activity | ⚪ Not started |
+| 9 | Command Center and activity | 🟡 Activity page with real execution history done early (Phase 4); live metrics/notifications pending |
 | 10 | Billing | ⚪ Not started — needs owner decision on payment provider |
 | 11 | Security, performance, testing, deployment | ⚪ Not started |
 
@@ -197,3 +197,53 @@ non-empty database).
 **Deferred to Phase 4** (they need the provider registry): per-agent provider/model, input/output schemas, knowledge
 files and memory settings in the builder. Publishing agents to other workspaces is not offered yet (custom agents are
 private or shared with one workspace).
+
+### Phase 4 — real AI execution engine (2026-11-11)
+
+**Implemented**
+* Provider layer: adapters emit text, tool calls and token usage (OpenAI `stream_options.include_usage`, Gemini
+  `usageMetadata` incl. thinking tokens). Failures are `ProviderError`s with user-safe messages (auth, quota,
+  unavailable, timeout, network, blocked, empty); details stay in the logs.
+* **Live mode no longer falls back to canned demo text** when the provider fails (the audit's commitment): the user gets
+  an honest error. Demo mode (no key) is unchanged and clearly labelled.
+* Model catalog (`OPENAI_MODELS`, `GEMINI_MODELS`) at `GET /api/v1/models`; saved agents can be pinned to an allowed
+  provider/model (validated, versioned; an agent whose model was later removed falls back to the default, logged).
+  The agent editor shows a model picker for signed-in users.
+* Tool registry (`GET /api/v1/tools`): calculator, current time, SSRF-guarded `url_fetch`, Tavily `web_search`
+  (awaiting `TAVILY_API_KEY`); code interpreter, files, knowledge, tickets and email are listed as unavailable with the
+  reason and are never offered or pretended.
+* Tool-calling loop for OpenAI and Gemini (Gemini thought signatures echoed back): agent permissions ∩ available
+  tools, input validated with zod, per-tool timeouts, errors returned to the model, untrusted output wrapped and
+  labelled, up to 4 rounds then a forced answer, every extra model call charged to the rate limit, refusal of tools
+  the agent isn't permitted.
+* Executions record provider, model, model calls, tokens (null when not reported — never estimated) and each tool
+  invocation; usage records for tokens. `GET /api/v1/executions`, `/:id`, `POST /:id/cancel` (stops a run in this
+  process; members see their own runs, admins the workspace's).
+* UI: tool calls appear live in the thought stream (a failed tool call doesn't fail the reply); **Activity** page with
+  real run history, status filter, run details (input, output, tokens, tool calls) and cancel; Settings lists tool
+  availability; built-in agents that clearly benefit got `url_fetch`, `calculator` or `current_time`.
+
+**Security notes** — `url_fetch`: http/https only, ports 80/443, no credentials in URLs, IP literals and every DNS
+answer checked against private/loopback/link-local/CGNAT/metadata/reserved/multicast ranges (IPv4, IPv6 and
+IPv4-mapped) **at connection time** via a pinned lookup, every redirect re-checked (max 4), 2 MB / 12k chars / 15 s
+limits, HTML reduced to text. No shell or code execution exists anywhere in the server.
+
+**Database changes** — migration `20261111090513_tool_invocations` (additive).
+
+**Tests** — typecheck ✅ · client unit 69/69 ✅ · server 118/118 ✅ (28 new: calculator, address blocklist, URL checks, DNS
+guard, url_fetch against a local server incl. redirects to private addresses, truncation, content types; registry
+availability/permissions/validation/timeouts; OpenAI and Gemini tool-call round trips with exact wire formats; tool
+refusal; round cap; rate limit on extra calls; honest live errors; `/models`, `/tools`; executions with summed tokens,
+usage rows, tool invocations, pinned models, visibility, live cancellation) · build ✅ · e2e features 79/79 ✅ · visual
+76/76 ✅ · shell 74/74 ✅ · smoke 9/9 ✅ · accounts 27/27 ✅ · marketplace 14/14 ✅ · tools 15/15 ✅ (new: live mode against a
+fake OpenAI — tool call in the thought stream, honest provider error, pinned model, Activity, settings).
+
+**Test fix** — the visual suite's cursor-ring check sampled an eased animation at a fixed 800 ms and was borderline on
+both this branch and the previous commit (436–444 px against a 432 + 12 px target); it now waits up to 3 s for the ring
+to settle, same expectation.
+
+**Not verified here** — real OpenAI/Gemini/Tavily APIs (no keys in this environment; wire formats are tested against
+fakes that follow the providers' documented formats). Run one live chat with a tool after configuring keys.
+
+**Deferred** — sandboxed code execution (needs an isolated runtime service; deliberately not run on the API server),
+durable/queued execution and recovery after restarts (Phase 5), structured output schemas for agents.

@@ -3,7 +3,7 @@ import type { ChatEvent, PublicAgent } from '../../server/src/contracts';
 export type Theme = 'dark' | 'light';
 
 /** Simulated tools an agent may be permitted to use (nothing is actually searched, run or sent). */
-export const TOOL_IDS = ['web_search', 'code_interpreter', 'file_reader', 'ticket_system', 'email_sender', 'knowledge_base', 'calculator'] as const;
+export const TOOL_IDS = ['web_search', 'url_fetch', 'calculator', 'current_time', 'code_interpreter', 'file_reader', 'ticket_system', 'email_sender', 'knowledge_base'] as const;
 export type ToolId = (typeof TOOL_IDS)[number];
 
 /** A built-in agent, as served by GET /api/v1/agents. */
@@ -17,6 +17,9 @@ export interface AgentDraft {
   systemPrompt: string;
   temperature: number;
   tools: ToolId[];
+  /** Saved agents only: a specific model (both or neither). Not part of exported agent files. */
+  provider?: 'openai' | 'gemini' | null;
+  model?: string | null;
 }
 
 /** A user-created agent: in localStorage for guests, in the workspace (server) when signed in. */
@@ -72,6 +75,8 @@ export interface TraceStep {
   status: StepStatus;
   output: string; // streamed text of intermediate steps (the final step's text is the message itself)
   error?: string;
+  /** 'tool': a tool call the agent made (its failure is reported to the model and does not fail the reply). */
+  kind?: 'tool';
   startedAt?: number;
   endedAt?: number;
 }

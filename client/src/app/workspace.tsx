@@ -3,6 +3,7 @@ import type { MetaResponse } from '../../../server/src/contracts';
 import type { useChat } from '../hooks/useChat';
 import type { Me } from '../lib/account';
 import type { AgentStats } from '../lib/marketplace';
+import type { ModelCatalog, ToolInfo } from '../lib/tools';
 import type { FxPref } from '../lib/fx/capability';
 import type { PageId } from '../lib/route';
 import type { Agent, AgentDraft, CustomAgent, Theme, Workflow } from '../types';
@@ -14,6 +15,9 @@ export interface WorkspaceApi {
   mode: 'live' | 'demo' | null;
   /** What the server has configured; null until loaded (or if the server is older than /api/v1/meta). */
   meta: MetaResponse | null;
+  /** Tools and models available on this server (null until loaded or if the server is older). */
+  toolInfo: ToolInfo[] | null;
+  models: ModelCatalog | null;
   loading: boolean;
   loadError: boolean;
   reload: () => void;

@@ -13,6 +13,7 @@ import { useChat } from './hooks/useChat';
 import { ApiError, fetchAgents, fetchHealth, fetchMeta, fetchWorkflows } from './lib/api';
 import { account as accountApi, auth as authApi, conversations, savedAgents, type Me, type SavedAgent } from './lib/account';
 import { marketplace, type AgentStats } from './lib/marketplace';
+import { fetchModels, fetchTools, type ModelCatalog, type ToolInfo } from './lib/tools';
 import { EMPTY_DRAFT, MAX_AGENT_FILE_BYTES, isStoredAgent, parseAgentFile } from './lib/agentFile';
 import { chatFileName, chatToMarkdown, copyToClipboard, downloadTextFile } from './lib/chatExport';
 import { MOD, isEditableTarget } from './lib/platform';
@@ -37,6 +38,7 @@ const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
 const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const PlannedPage = lazy(() => import('./pages/PlannedPage'));
 const AgentDetailPage = lazy(() => import('./pages/AgentDetailPage'));
+const ActivityPage = lazy(() => import('./pages/ActivityPage'));
 const AuthPage = lazy(() => import('./pages/AuthPage'));
 const NotFoundPage = lazy(() => import('./pages/PlannedPage').then(m => ({ default: m.NotFoundPage })));
 
@@ -47,11 +49,15 @@ const EMPTY_COMPOSER: { value: string; workflow: Workflow | null } = { value: ''
 
 const uid = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36));
 const isTheme = (v: unknown): v is Theme => v === 'dark' || v === 'light';
-const draftOf = (a: CustomAgent): AgentDraft => ({ name: a.name, description: a.description, icon: a.icon, systemPrompt: a.systemPrompt, temperature: a.temperature, tools: a.tools });
+const draftOf = (a: CustomAgent): AgentDraft => ({
+  name: a.name, description: a.description, icon: a.icon, systemPrompt: a.systemPrompt, temperature: a.temperature, tools: a.tools,
+  ...(a.provider !== undefined && { provider: a.provider, model: a.model })
+});
 const isDesktop = () => window.matchMedia('(min-width: 1024px)').matches;
 const fromSaved = (a: SavedAgent): CustomAgent => ({
   id: a.id, name: a.name, description: a.description, icon: a.icon, systemPrompt: a.systemPrompt, temperature: a.temperature, tools: a.tools as CustomAgent['tools'],
-  createdAt: a.createdAt, updatedAt: a.updatedAt, canEdit: a.canEdit, visibility: a.visibility, createdByName: a.createdByName, version: a.version
+  createdAt: a.createdAt, updatedAt: a.updatedAt, canEdit: a.canEdit, visibility: a.visibility, createdByName: a.createdByName, version: a.version,
+  provider: a.provider, model: a.model
 });
 const failure = (err: unknown) => (err instanceof Error ? err.message : 'Something went wrong. Please try again.');
 
@@ -72,6 +78,8 @@ export default function App() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [mode, setMode] = useState<'live' | 'demo' | null>(null);
   const [meta, setMeta] = useState<MetaResponse | null>(null);
+  const [toolInfo, setToolInfo] = useState<ToolInfo[] | null>(null);
+  const [models, setModels] = useState<ModelCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const load = useCallback(async () => {
@@ -83,6 +91,9 @@ export default function App() {
       setWorkflows(w);
       setMode(h?.mode ?? null);
       setMeta(m);
+      // Older servers have neither endpoint; then the UI simply shows no availability notes or model choice.
+      void fetchTools().then(setToolInfo).catch(() => setToolInfo(null));
+      void fetchModels().then(setModels).catch(() => setModels(null));
     } catch {
       setLoadError(true);
     } finally {
@@ -405,7 +416,7 @@ export default function App() {
 
   // ---- shared workspace API for the pages and the shell
   const ws = useMemo<WorkspaceApi>(() => ({
-    agents, workflows, mode, meta, loading, loadError, reload: () => void load(),
+    agents, workflows, mode, meta, toolInfo, models, loading, loadError, reload: () => void load(),
     account: { status: accountStatus, me, signOut, switchWorkspace, createWorkspace },
     customAgents, maxCustomAgents: maxAgents, localAgentsToImport: signedIn ? localAgents : [], importLocalAgents, setAgentVisibility,
     duplicateCustomAgent: id => void duplicateCustomAgent(id), removeCustomAgent: id => void removeCustomAgent(id), removeAllCustomAgents,
@@ -417,7 +428,7 @@ export default function App() {
     theme, setTheme, fxPref: fx.pref, setFxPref: (p: FxPref) => fx.setPref(p),
     navigate,
     openPalette: () => setPaletteOpen(true), openShortcuts: () => setShortcutsOpen(true), openDocs: () => setDocsOpen(true)
-  }), [agents, workflows, mode, meta, loading, loadError, load, accountStatus, me, signOut, switchWorkspace, createWorkspace,
+  }), [agents, workflows, mode, meta, toolInfo, models, loading, loadError, load, accountStatus, me, signOut, switchWorkspace, createWorkspace,
     customAgents, maxAgents, signedIn, localAgents, importLocalAgents, setAgentVisibility, duplicateCustomAgent, removeCustomAgent, removeAllCustomAgents,
     stats, refreshStats, favorites, toggleFavorite, startChatWith,
     chat, selectAgent, startWorkflow, openCreator, triggerImport, theme, fx, navigate]);
@@ -526,6 +537,7 @@ export default function App() {
       case 'builder': return <BuilderPage />;
       case 'workflows': return <WorkflowsPage />;
       case 'settings': return <SettingsPage />;
+      case 'activity': return <ActivityPage />;
       default: return <PlannedPage item={navItem(page)} />;
     }
   };
@@ -567,6 +579,7 @@ export default function App() {
         <AgentCreator
           open={creator.open} onClose={closeCreator} initial={creator.draft} initialWarnings={creator.warnings} editing={!!creator.editingId}
           onSave={saveAgent} onDelete={deleteAgent} onExport={setExportDraft}
+          toolInfo={toolInfo ?? undefined} models={signedIn ? models : null}
         />
         <AgentExportModal draft={exportDraft} onClose={() => setExportDraft(null)} />
       </div>

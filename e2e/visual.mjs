@@ -229,8 +229,9 @@ await shot(page, 'v-live-done');
 // ---- ring behaviour inside the workspace
 const row = page.locator('[data-agent]').nth(1); await row.scrollIntoViewIfNeeded(); await sleep(300);
 const sb = await centre(row);
-await page.mouse.move(sb.x, sb.y, { steps: 8 }); await sleep(800);
-c = await cur();
+await page.mouse.move(sb.x, sb.y, { steps: 8 });
+// The ring eases toward its target, so wait (up to 3 s) for it to settle instead of sampling one fixed moment.
+for (let t = 0; t < 3000; t += 100) { await sleep(100); c = await cur(); if (Math.abs(c.rw - (sb.w + 12)) < 10) break; }
 check('sidebar rows use the snapping ring (not the big disc)', c.label === '' && Math.abs(c.rw - (sb.w + 12)) < 10, `${c.rw.toFixed(0)} vs ${sb.w.toFixed(0)}`);
 const tb = await centre(composer);
 await page.mouse.move(tb.x, tb.y, { steps: 8 }); await sleep(600);

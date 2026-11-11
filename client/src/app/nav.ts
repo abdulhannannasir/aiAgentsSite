@@ -46,12 +46,7 @@ export const NAV: NavItem[] = [
     capabilities: ['GitHub, Google Drive / Calendar / Gmail, Slack and signed webhooks', 'OAuth with explicit scopes; credentials encrypted at rest', 'A service shows as connected only after a real API call succeeds'],
     requires: ['database', 'auth']
   },
-  {
-    id: 'activity', label: 'Activity', icon: Activity, section: 'Insights', status: 'planned', phase: 9,
-    description: 'Every execution, step and approval, with timelines.',
-    capabilities: ['Execution history with inputs, outputs, errors and logs', 'Live updates over Server-Sent Events', 'Approval inbox for sensitive actions'],
-    requires: ['database', 'auth']
-  },
+  { id: 'activity', label: 'Activity', icon: Activity, section: 'Insights', status: 'ready', description: 'Every agent run: status, model, tokens, tools and timing.' },
   {
     id: 'analytics', label: 'Analytics', icon: BarChart3, section: 'Insights', status: 'planned', phase: 9,
     description: 'Usage, cost and reliability, computed from recorded executions.',
