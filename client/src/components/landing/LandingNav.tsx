@@ -25,7 +25,9 @@ export function LandingNav({ onLaunch, onOpenPalette }: { onLaunch: () => void; 
           <span className="font-display text-lg font-bold tracking-tight">Agent<span className="text-neon-cyan">Verse</span></span>
         </button>
 
-        <ul className="ml-4 hidden items-center gap-1 md:flex">
+        {/* The links need about 880px next to the logo, search and Launch, so they show from `lg` (1024px). From `md` they pushed
+            Launch off-screen at 768px (an iPad in portrait) and wrapped their labels up to ~860px. Below `lg` the bar is logo, search, Launch. */}
+        <ul className="ml-4 hidden items-center gap-1 lg:flex">
           {LINKS.map(l => (
             <li key={l.id}>
               <button type="button" onClick={() => scrollToSection(l.id)} className="rounded-lg px-3 py-1.5 font-mono text-xs uppercase tracking-wider text-muted transition hover:bg-hover hover:text-fg">{l.label}</button>
