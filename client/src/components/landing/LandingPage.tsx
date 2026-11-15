@@ -26,7 +26,7 @@ export function LandingPage(p: LandingProps) {
     <div className="dark relative min-h-dvh bg-aurora font-sans text-fg">
       <LandingNav onLaunch={p.onLaunch} onOpenPalette={p.onOpenPalette} />
       <main className="relative z-10">
-        <Hero agentCount={p.agents.length} workflowCount={p.workflows.length} mode={p.mode} onLaunch={p.onLaunch} onSeeHow={() => scrollToSection('agents')} />
+        <Hero agentCount={p.agents.length} workflows={p.workflows} mode={p.mode} onLaunch={p.onLaunch} onSeeHow={() => scrollToSection('agents')} />
         <FxBoundary onError={() => undefined}>
           <Suspense fallback={<div aria-hidden className="h-[60vh]" />}>
             <BelowFold {...p} />
