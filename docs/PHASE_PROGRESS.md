@@ -9,7 +9,7 @@ Single source of truth for where the 12-phase build stands. Updated at the end o
 | 2 | Auth, database, user management | ✅ Done (team invitations UI deferred, see below) |
 | 3 | Agent marketplace | ✅ Done (per-agent model choice moves to Phase 4, see below) |
 | 4 | Real AI execution engine | ✅ Done (sandboxed code execution deliberately not offered, see below) |
-| 5 | Multi-agent orchestration | ⚪ Not started (4 sequential workflows exist from before) |
+| 5 | Multi-agent orchestration | ✅ Done (Redis/BullMQ path verified locally; no managed Redis deploy yet, see below) |
 | 6 | Visual workflow studio | ⚪ Not started |
 | 7 | Projects, memory, knowledge | ⚪ Not started |
 | 8 | Integrations | ⚪ Not started |
@@ -247,3 +247,70 @@ fakes that follow the providers' documented formats). Run one live chat with a t
 
 **Deferred** — sandboxed code execution (needs an isolated runtime service; deliberately not run on the API server),
 durable/queued execution and recovery after restarts (Phase 5), structured output schemas for agents.
+
+### Phase 5 — multi-agent orchestration (2026-11-16)
+
+**Implemented**
+* **Orchestrator** (`server/src/modules/orchestration`): a goal → an LLM planner → a validated task DAG (1–6 tasks, known
+  agents only, dependencies only on earlier tasks so the graph is acyclic by construction, tools cut down to the
+  agent's permissions ∩ what this server has). An invalid plan gets one repair attempt that shows the planner the
+  validation error; after that the run fails with an honest message. Demo mode uses a fixed, labelled demo plan.
+* **Scheduler**: ready tasks (all dependencies succeeded) are queued up to `ORCHESTRATION_CONCURRENCY` per run, so
+  independent tasks run in parallel; tasks behind a failed or skipped dependency are skipped with the reason. Each
+  scheduling step holds a per-orchestration Postgres advisory lock.
+* **Durable state**: the database is the source of truth (`Orchestration`, `OrchestrationTask`, `ApprovalRequest`);
+  every transition is a conditional update ("only if still X"), so duplicate or late jobs, several workers and
+  restarts cannot run a step twice or overwrite each other. Tasks are claimed with a lease (renewed by a heartbeat)
+  and attempt number.
+* **Queue drivers**: BullMQ on Redis when `REDIS_URL` is set (jobs survive restarts; a separate `npm run worker`
+  process can consume them; crashed handlers retry with exponential backoff and stay in the failed set as the
+  dead-letter list), otherwise an in-process queue that is labelled **not durable** in the API and the UI.
+* **Retries and dead-letter**: transient provider errors (quota, unavailable, timeout, network, empty) retry with
+  exponential backoff up to 3 attempts; permanent errors (bad credentials, rejected request, blocked) fail at once. A
+  task that fails for good fails the orchestration, which can be resumed with **Retry task** (resets the task and
+  everything skipped because of it; finished tasks are not re-run).
+* **Recovery**: a sweep on start and every 30 s re-queues tasks whose lease expired (or fails them on their last
+  attempt), re-queues queued tasks (in-process jobs are lost on restart), restarts stalled planning/synthesis and
+  re-schedules running orchestrations.
+* **Cancellation**: immediate in this process, and within one heartbeat in any other worker; pending approvals are
+  cancelled with it.
+* **Approvals**: a task whose tools reach outside the server and bring untrusted content back (`url_fetch`,
+  `web_search`) waits for a person before it runs. Rationale: in an autonomous multi-step run, an outbound request is
+  where a prompt-injected agent could leak data. Approve → it runs; reject → it and its dependents are skipped and the
+  rest is still combined. Who may decide: the requester or a workspace owner/admin. Audited.
+* **Least-privilege context**: a task sees the goal, its own instruction and only its dependencies' outputs.
+* **Synthesis with provenance**: a final call combines the results and must cite tasks as `[T1]`; cited keys that
+  exist are stored as `sources`, and the synthesizer is told which tasks were skipped or failed.
+* **Metering**: model calls and tokens per task and per run (null when the provider reports none), usage records
+  written as they happen (so retries never double-count) plus one `ORCHESTRATION_RUN` record.
+* **API**: `POST/GET /api/v1/orchestrations` (with `Idempotency-Key`), `GET /:id`, `POST /:id/cancel`,
+  `POST /:id/tasks/:key/retry`, `GET /api/v1/approvals`, `POST /api/v1/approvals/:id`; `/meta` reports
+  `orchestration: { available, durable, worker, reason? }`. Limits: 3 runs in progress per person; a start charges the
+  rate limiter for planning + 6 tasks + synthesis.
+* **UI**: new **Orchestrator** page (sidebar): goal form (with an idempotency key per goal), approvals inbox, recent
+  runs, and a run view with the plan grouped into stages (parallel tasks side by side), live status, approval
+  buttons, retry, cancel, task results, the combined answer and clickable sources.
+
+**Availability** — needs accounts (database + auth). On serverless hosts (Vercel) it needs `REDIS_URL` and a worker on
+a long-running host; otherwise `/meta` and the page say why it is unavailable. `ORCHESTRATION_WORKER=off` makes an API
+server only enqueue.
+
+**Database changes** — migration `20261115234229_orchestration` (additive: 3 tables, 3 enums, one new `UsageKind` value).
+
+**Tests** — typecheck ✅ · client unit 71/71 ✅ · server 144/144 ✅ (26 new: plan validation incl. cycles/forward
+references/duplicates/unknown agents/tool filtering, JSON extraction, citations, approval rules, in-process queue
+concurrency and de-duplication, Redis URL parsing; against PostgreSQL: DAG run with parallel tasks, least-privilege
+prompts, provenance and exact usage, plan repair and honest planning failure, retry after 503, dead-letter on 401 with
+skipped dependents and manual retry, approval approve/reject, cancel with pending approvals, Idempotency-Key,
+workspace isolation, active-run limit, lease-expiry recovery, demo mode, unavailable states; **with Redis**: an
+API-only server queues durably and a separately started worker runs the job) · build ✅ · e2e orchestrator 22/22 ✅ (new:
+plan → approval → answer with sources, reject, inbox, cancel, phone layout, guest mode) and 21/21 against an API with
+`ORCHESTRATION_WORKER=off` + Redis + a separate `npm run worker` process · features 79/79 ✅ · visual 76/76 ✅ · shell
+74/74 ✅ · smoke 9/9 ✅ · accounts 27/27 ✅ · marketplace 14/14 ✅ · tools 15/15 ✅.
+
+**Not verified here** — a managed Redis (Railway/Upstash) deploy and real provider planning quality (planner and
+synthesizer prompts are tested against a fake model; plan quality with a real model should be checked after keys are
+configured).
+
+**Deferred** — the 4 fixed workflows still run inline in the chat request (they move onto this engine as templates in
+Phase 6); notifications for pending approvals (Phase 9 event bus / notifications); planner use of saved custom agents.

@@ -72,8 +72,17 @@ const EnvSchema = z.object({
   REQUIRE_EMAIL_VERIFICATION: z.preprocess(blankToUndefined, z.enum(['true', 'false']).optional()),
   SMTP_URL: z.preprocess(blankToUndefined, z.string().regex(/^smtps?:\/\//, 'must start with smtp:// or smtps://').optional()),
   MAIL_FROM: z.preprocess(blankToUndefined, z.string().default('AgentVerse <no-reply@localhost>')),
-  REDIS_URL: optionalString,
-  S3_BUCKET: optionalString
+  REDIS_URL: z.preprocess(blankToUndefined, z.string().regex(/^rediss?:\/\//, 'must start with redis:// or rediss://').optional()),
+  S3_BUCKET: optionalString,
+
+  // Orchestration (Phase 5). Whether this process also consumes orchestration jobs. Default: on, except on
+  // serverless hosts (Vercel), where a separate `npm run worker` process must do it.
+  ORCHESTRATION_WORKER: z.preprocess(blankToUndefined, z.enum(['on', 'off']).optional()),
+  ORCHESTRATION_CONCURRENCY: num(2),
+  WORKER_CONCURRENCY: num(4),
+  ORCHESTRATION_RETRY_BASE_MS: num(2000),
+  // Set by Vercel on its build and runtime.
+  VERCEL: optionalString
 });
 
 export interface GeminiConfig {
@@ -117,6 +126,16 @@ export interface AppConfig {
     requireEmailVerification: boolean;
   };
   mail: { smtpUrl: string | null; from: string };
+  redisUrl: string | null;
+  orchestration: {
+    /** This process consumes orchestration jobs. */
+    worker: boolean;
+    /** Running on a serverless host: work cannot continue after a response, so a queue (Redis) is required. */
+    serverless: boolean;
+    concurrencyPerRun: number;
+    workerConcurrency: number;
+    retryBaseMs: number;
+  };
 }
 
 export class ConfigError extends Error {
@@ -189,6 +208,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       baseUrl: stripSlash(e.BETTER_AUTH_URL ?? `http://localhost:${e.PORT}`),
       requireEmailVerification: e.REQUIRE_EMAIL_VERIFICATION ? e.REQUIRE_EMAIL_VERIFICATION === 'true' : !!e.SMTP_URL
     },
-    mail: { smtpUrl: e.SMTP_URL ?? null, from: e.MAIL_FROM }
+    mail: { smtpUrl: e.SMTP_URL ?? null, from: e.MAIL_FROM },
+    redisUrl: e.REDIS_URL ?? null,
+    orchestration: {
+      worker: e.ORCHESTRATION_WORKER ? e.ORCHESTRATION_WORKER === 'on' : !e.VERCEL,
+      serverless: !!e.VERCEL,
+      concurrencyPerRun: Math.max(1, Math.min(6, Math.floor(e.ORCHESTRATION_CONCURRENCY))),
+      workerConcurrency: Math.max(1, Math.min(32, Math.floor(e.WORKER_CONCURRENCY))),
+      retryBaseMs: e.ORCHESTRATION_RETRY_BASE_MS
+    }
   };
 }

@@ -91,6 +91,81 @@ export interface MetaResponse {
     redis: boolean;
     storage: boolean;
   };
+  /** Multi-agent orchestration (Phase 5): whether it can run here, and whether its jobs survive restarts. */
+  orchestration: { available: boolean; durable: boolean; worker: boolean; reason?: string };
+}
+
+// ---------------------------------------------------------------- orchestration (Phase 5)
+
+export type OrchestrationStatus = 'PLANNING' | 'RUNNING' | 'SYNTHESIZING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type OrchestrationTaskStatus = 'PENDING' | 'WAITING_APPROVAL' | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED' | 'CANCELLED';
+export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
+
+export interface ApprovalView {
+  id: string;
+  orchestrationId: string;
+  taskKey: string;
+  taskTitle: string;
+  tools: string[];
+  reason: string;
+  status: ApprovalStatus;
+  requestedBy: string | null;
+  decidedBy: string | null;
+  decidedAt: number | null;
+  note: string | null;
+  createdAt: number;
+  /** Whether the caller may approve or reject it (the requester, or a workspace owner/admin). */
+  canDecide: boolean;
+}
+
+export interface OrchestrationTaskView {
+  key: string;
+  title: string;
+  agentId: string;
+  agentName: string;
+  agentIcon: string;
+  instruction: string;
+  tools: string[];
+  dependsOn: string[];
+  status: OrchestrationTaskStatus;
+  attempt: number;
+  maxAttempts: number;
+  output: string | null;
+  error: string | null;
+  toolCalls: Array<{ tool: string; ok: boolean; summary: string; durationMs: number }>;
+  modelCalls: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  startedAt: number | null;
+  endedAt: number | null;
+  approval: ApprovalView | null;
+}
+
+export interface OrchestrationSummary {
+  id: string;
+  goal: string;
+  status: OrchestrationStatus;
+  durable: boolean;
+  provider: string;
+  model: string | null;
+  modelCalls: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  tasks: { total: number; done: number; waitingApproval: number };
+  error: string | null;
+  user: string | null;
+  mine: boolean;
+  createdAt: number;
+  endedAt: number | null;
+}
+
+export interface OrchestrationView extends OrchestrationSummary {
+  planSummary: string | null;
+  output: string | null;
+  /** Task keys the answer cites, in order of first citation. */
+  sources: string[];
+  taskList: OrchestrationTaskView[];
+  canManage: boolean;
 }
 
 export interface ApiErrorBody {

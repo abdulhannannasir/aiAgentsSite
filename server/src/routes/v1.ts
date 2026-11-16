@@ -28,9 +28,10 @@ export interface RouteDeps {
   limiter: RateLimiter;
   version: string;
   platform: Platform;
+  orchestration: MetaResponse['orchestration'];
 }
 
-export function v1Router({ cfg, log, llm, tools, limiter, version, platform }: RouteDeps): Router {
+export function v1Router({ cfg, log, llm, tools, limiter, version, platform, orchestration }: RouteDeps): Router {
   const r = Router();
   const publicWorkflows = WORKFLOWS.map(toPublicWorkflow);
   const mode = llm.provider === 'demo' ? 'demo' : 'live';
@@ -48,7 +49,8 @@ export function v1Router({ cfg, log, llm, tools, limiter, version, platform }: R
         gemini: { configured: !!cfg.gemini.apiKey, model: cfg.gemini.apiKey ? cfg.gemini.model : null }
       },
       // "auth" means accounts actually work here (database + secret + a working auth module).
-      features: { ...cfg.features, auth: !!platform.auth, email: platform.mailer.configured }
+      features: { ...cfg.features, auth: !!platform.auth, email: platform.mailer.configured },
+      orchestration
     };
     res.json(body);
   });

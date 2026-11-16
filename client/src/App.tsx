@@ -39,6 +39,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage'));
 const PlannedPage = lazy(() => import('./pages/PlannedPage'));
 const AgentDetailPage = lazy(() => import('./pages/AgentDetailPage'));
 const ActivityPage = lazy(() => import('./pages/ActivityPage'));
+const OrchestratorPage = lazy(() => import('./pages/OrchestratorPage'));
 const AuthPage = lazy(() => import('./pages/AuthPage'));
 const NotFoundPage = lazy(() => import('./pages/PlannedPage').then(m => ({ default: m.NotFoundPage })));
 
@@ -538,6 +539,7 @@ export default function App() {
       case 'workflows': return <WorkflowsPage />;
       case 'settings': return <SettingsPage />;
       case 'activity': return <ActivityPage />;
+      case 'orchestrator': return <OrchestratorPage orchestrationId={route.orchestrationId} />;
       default: return <PlannedPage item={navItem(page)} />;
     }
   };

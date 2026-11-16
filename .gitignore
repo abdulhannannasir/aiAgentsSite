@@ -7,3 +7,6 @@ npm-debug.log*
 /public/
 /server/dist/
 /server/src/generated/
+
+# Redis snapshots from a local redis-server
+dump.rdb

@@ -12,7 +12,7 @@ export const AUTH_PAGES = ['sign-in', 'sign-up', 'forgot-password', 'reset-passw
 export type AuthPageId = (typeof AUTH_PAGES)[number];
 
 export const PAGE_IDS = [
-  'chat', 'command-center', 'discover', 'my-agents', 'builder', 'workflows',
+  'chat', 'command-center', 'discover', 'my-agents', 'builder', 'workflows', 'orchestrator',
   'projects', 'memory', 'integrations', 'activity', 'analytics', 'settings', 'billing'
 ] as const;
 export type PageId = (typeof PAGE_IDS)[number];
@@ -28,6 +28,8 @@ export interface Route {
   params?: Record<string, string>;
   /** #/app/agent/<id>: the agent detail page (shown under Discover). */
   agentId?: string;
+  /** #/app/orchestrator/<id>: one orchestration. */
+  orchestrationId?: string;
 }
 
 const isPage = (s: string): s is PageId => (PAGE_IDS as readonly string[]).includes(s);
@@ -42,6 +44,8 @@ export function parseRoute(hash: string): Route {
   }
   const d = /^#\/app\/agent\/([a-z0-9-]{1,80})\/?$/.exec(hash);
   if (d) return { view: 'app', page: 'discover', unknown: false, agentId: d[1] };
+  const o = /^#\/app\/orchestrator\/([A-Za-z0-9_-]{1,64})\/?$/.exec(hash);
+  if (o) return { view: 'app', page: 'orchestrator', unknown: false, orchestrationId: o[1] };
   const m = /^#\/app(?:\/([^/?#]*))?\/?(?:[?].*)?$/.exec(hash);
   if (!m) {
     // Anything else under #/app/ is a broken or old link inside the app: show "not found", not the landing page.
@@ -81,6 +85,7 @@ function setHash(target: string) {
 
 export const authHref = (p: AuthPageId) => `#/auth/${p}`;
 export const agentHref = (id: string) => `#/app/agent/${encodeURIComponent(id)}`;
+export const orchestrationHref = (id?: string) => (id ? `#/app/orchestrator/${encodeURIComponent(id)}` : '#/app/orchestrator');
 export const goAuth = (p: AuthPageId) => setHash(authHref(p));
 
 export function useRoute(): [Route, (page: PageId) => void] {

@@ -1,5 +1,6 @@
 import { execSync } from 'node:child_process';
 import pg from 'pg';
+import type { AppOptions } from '../src/app.js';
 import { startApp, type TestServer } from './helpers.js';
 
 /**
@@ -33,8 +34,8 @@ export async function sql<T extends pg.QueryResultRow = Record<string, unknown>>
   try { return (await client.query<T>(text, params)).rows; } finally { await client.end(); }
 }
 
-export const startDbApp = (env: Record<string, string> = {}): Promise<TestServer> =>
-  startApp({ DATABASE_URL: TEST_DB, BETTER_AUTH_SECRET: SECRET, BETTER_AUTH_URL: ORIGIN, ...env });
+export const startDbApp = (env: Record<string, string> = {}, opts: AppOptions = {}): Promise<TestServer> =>
+  startApp({ DATABASE_URL: TEST_DB, BETTER_AUTH_SECRET: SECRET, BETTER_AUTH_URL: ORIGIN, ...env }, opts);
 
 /** A tiny cookie-jar client for one user. */
 export class Client {

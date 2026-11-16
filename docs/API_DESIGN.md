@@ -125,9 +125,29 @@ Saved agents accept `provider` + `model` (both or neither; must be listed in `/m
 `{ type: 'tool', id, tool, label, status: running|done|error, input?, summary?, durationMs? }`, and the signed-in
 `conversation` event carries `executionId`. Provider failures arrive as `error` events with a user-safe message.
 
+### Phase 5 (orchestration) — implemented
+
+Needs accounts; without them (or on a serverless host without `REDIS_URL`) these answer 503 `FEATURE_UNAVAILABLE`, and
+`GET /meta` reports `orchestration: { available, durable, worker, reason? }`.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| POST | `/api/v1/orchestrations` | `{ goal }` (3–4000 chars). Optional `Idempotency-Key` header (8–100 of `A-Za-z0-9_.:-`): the same key in the workspace returns the same run (`200 { id, created: false }`, `409` if another user used it). `202 { id, created: true }`. 429 when 3 of your runs are in progress. |
+| GET | `/api/v1/orchestrations` | latest 30: status, task counts (`total`, `done`, `waitingApproval`), model calls, tokens. Members see their own, owners/admins the workspace's. |
+| GET | `/api/v1/orchestrations/:id` | goal, `planSummary`, `taskList` (key, title, agent, instruction, tools, dependsOn, status, attempt, output, error, tool calls, tokens, approval), `output`, `sources` (cited task keys), `durable`, `canManage` |
+| POST | `/api/v1/orchestrations/:id/cancel` | starter or admin; 202, 409 when already ended |
+| POST | `/api/v1/orchestrations/:id/tasks/:key/retry` | re-runs a FAILED task of a FAILED run and everything skipped because of it; 409 otherwise |
+| GET | `/api/v1/approvals?status=PENDING` | approvals inbox (requester's own; owners/admins: workspace) |
+| POST | `/api/v1/approvals/:id` | `{ decision: 'approve' \| 'reject', note? }` by the requester or an owner/admin; 409 when already decided |
+
+Run statuses: `PLANNING → RUNNING → SYNTHESIZING → COMPLETED`, or `FAILED` / `CANCELLED`. Task statuses: `PENDING`
+(waiting for inputs), `WAITING_APPROVAL`, `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED` (out of attempts or permanent
+error), `SKIPPED` (a dependency did not complete, or the approval was rejected), `CANCELLED`. Clients poll `GET /:id`
+while a run is active (an SSE event bus arrives with Phase 9).
+
 ### Later phases (shape reserved)
 
-`/api/v1/executions` (list, get, cancel, events SSE) · `/api/v1/tools` · `/api/v1/orchestrations` ·
+`/api/v1/executions/:id/events` (SSE) ·
 `/api/v1/workflows/:id/versions`, `/runs` · `/api/v1/projects`, `/files` · `/api/v1/memory` ·
 `/api/v1/integrations` · `/api/v1/webhooks/in/:id` · `/api/v1/notifications` · `/api/v1/analytics/*` ·
 `/api/v1/billing/*`.

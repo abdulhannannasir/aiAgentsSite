@@ -1,5 +1,5 @@
 import {
-  Activity, BarChart3, Bot, Brain, CreditCard, FolderKanban, Gauge, MessagesSquare, Plug, Settings, Sparkles, Wand2, Workflow,
+  Activity, BarChart3, Bot, Brain, CreditCard, FolderKanban, Gauge, MessagesSquare, Network, Plug, Settings, Sparkles, Wand2, Workflow,
   type LucideIcon
 } from 'lucide-react';
 import type { PageId } from '../lib/route';
@@ -28,6 +28,7 @@ export const NAV: NavItem[] = [
   { id: 'my-agents', label: 'My Agents', icon: Bot, section: 'Workspace', status: 'ready', description: 'Agents you built or imported.' },
   { id: 'builder', label: 'Agent Builder', icon: Wand2, section: 'Workspace', status: 'ready', description: 'Create an agent from a template or from scratch.' },
   { id: 'workflows', label: 'Workflows', icon: Workflow, section: 'Workspace', status: 'ready', description: 'Multi-agent pipelines you can run from any chat.' },
+  { id: 'orchestrator', label: 'Orchestrator', icon: Network, section: 'Workspace', status: 'ready', description: 'Give a goal: a planner splits it into tasks for several agents, runs them and combines the results.' },
   {
     id: 'projects', label: 'Projects', icon: FolderKanban, section: 'Knowledge', status: 'planned', phase: 7,
     description: 'Persistent workspaces for conversations, agents, workflows and files.',

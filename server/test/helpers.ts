@@ -1,6 +1,6 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { createApp, type AppContext } from '../src/app.js';
+import { createApp, type AppContext, type AppOptions } from '../src/app.js';
 import { loadConfig } from '../src/config/env.js';
 import type { ChatEvent } from '../src/contracts.js';
 
@@ -11,9 +11,9 @@ export interface TestServer {
 }
 
 /** Starts the app on a random port with a clean env plus `env` overrides (no keys = demo mode). */
-export async function startApp(env: Record<string, string> = {}): Promise<TestServer> {
+export async function startApp(env: Record<string, string> = {}, opts: AppOptions = {}): Promise<TestServer> {
   const cfg = loadConfig({ NODE_ENV: 'test', ...env });
-  const ctx = createApp(cfg, { demoDelay: () => 0, staticDir: null });
+  const ctx = createApp(cfg, { demoDelay: () => 0, staticDir: null, ...opts });
   const server = ctx.app.listen(0);
   await new Promise(r => server.once('listening', r));
   const { port } = server.address() as AddressInfo;

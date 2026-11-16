@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NAV } from '../app/nav';
-import { PAGE_IDS, pageHref, parseRoute, parseView } from './route';
+import { PAGE_IDS, orchestrationHref, pageHref, parseRoute, parseView } from './route';
+import { stagesOf } from './orchestrations';
 import { formatDuration, recentActivity, sessionStats, timeAgo } from './sessionStats';
 import type { Message } from '../types';
 
@@ -31,9 +32,24 @@ describe('parseRoute', () => {
     expect(parseRoute('#/app/agent/../etc')).toMatchObject({ unknown: true });
   });
 
+  it('parses orchestration pages', () => {
+    expect(parseRoute(orchestrationHref('cm123abc'))).toEqual({ view: 'app', page: 'orchestrator', unknown: false, orchestrationId: 'cm123abc' });
+    expect(parseRoute(orchestrationHref())).toEqual({ view: 'app', page: 'orchestrator', unknown: false });
+    expect(parseRoute('#/app/orchestrator/a/b')).toMatchObject({ unknown: true });
+  });
+
   it('chat stays at plain #/app', () => {
     expect(pageHref('chat')).toBe('#/app');
     expect(pageHref('settings')).toBe('#/app/settings');
+  });
+});
+
+describe('orchestration stages', () => {
+  it('groups tasks by dependency depth so parallel tasks share a stage', () => {
+    const t = (key: string, dependsOn: string[] = []) => ({ key, dependsOn });
+    const stages = stagesOf([t('T1'), t('T2'), t('T3', ['T1']), t('T4', ['T3', 'T2']), t('T5', ['T1'])]);
+    expect(stages.map(s => s.map(x => x.key))).toEqual([['T1', 'T2'], ['T3', 'T5'], ['T4']]);
+    expect(stagesOf([])).toEqual([]);
   });
 });
 

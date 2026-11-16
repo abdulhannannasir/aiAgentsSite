@@ -80,7 +80,7 @@ or tool results; anything needing credentials ships as **awaiting configuration*
   disabled and labelled. Email/tickets require an authorised integration (Phase 8).
 * Live-mode failures become explicit errors (no demo-text fallback).
 
-## Phase 5 — Multi-agent orchestration
+## Phase 5 — Multi-agent orchestration ✅ (see PHASE_PROGRESS.md)
 
 * Planner (LLM structured output → task DAG), dependency resolution, scheduler with concurrency, BullMQ + Redis
   durable jobs (idempotency keys, retries with backoff, dead-letter queue, cancellation, recovery on restart),

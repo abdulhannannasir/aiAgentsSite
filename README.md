@@ -2,7 +2,7 @@
 
 42 pre-made AI agents, **multi-agent workflows**, and a **custom agent builder**: a React + TypeScript front end on a small Express API, wrapped in a cyberpunk-style interface with a 3D agent swarm, a scroll-driven landing page and live collaboration visuals.
 
-- `/` is the landing page. `/#/app` is the chat workspace, and `/#/app/<page>` the other app pages: Command Center, Discover Agents, My Agents, Agent Builder, Workflows and Settings, plus clearly labelled planned modules (Projects, Memory, Integrations, Activity, Analytics, Billing) that say which roadmap phase builds them. Hash routing, so no server rewrites are needed.
+- `/` is the landing page. `/#/app` is the chat workspace, and `/#/app/<page>` the other app pages: Command Center, Discover Agents, My Agents, Agent Builder, Workflows, Orchestrator, Activity and Settings, plus clearly labelled planned modules (Projects, Memory, Integrations, Analytics, Billing) that say which roadmap phase builds them. Hash routing, so no server rewrites are needed.
 
 - **Demo mode** (default): works instantly with no API key. Replies are canned text and simulated workflow steps.
 - **Live mode**: set `GEMINI_API_KEY` (Google Gemini) or `OPENAI_API_KEY` (OpenAI) and every agent answers with a real model, streamed token by token, calling real tools when it is permitted to (see **Tools**). If the provider fails, the user sees an honest error, never canned text.
@@ -152,6 +152,7 @@ The navbar badge shows **Demo mode** or **Live AI**.
 ```bash
 npm test             # client unit tests + server tests (API, validation, SSE, providers against fake upstreams)
 TEST_DATABASE_URL=postgresql://localhost/agentverse_test npm test   # also runs the PostgreSQL integration tests
+TEST_REDIS_URL=redis://localhost:6379/5 TEST_DATABASE_URL=… npm test # also runs the Redis (BullMQ) worker test
 npm run typecheck    # strict TypeScript, client and server
 ```
 
@@ -169,6 +170,8 @@ BASE_URL=http://127.0.0.1:3802 node e2e/marketplace.mjs
 # live mode against a fake OpenAI (see the header of e2e/tools.mjs)
 node e2e/mock-openai.mjs 3901 &
 BASE_URL=http://127.0.0.1:3803 node e2e/tools.mjs
+# orchestration (see the header of e2e/orchestrator.mjs)
+BASE_URL=http://127.0.0.1:3804 GUEST_URL=http://127.0.0.1:3801 node e2e/orchestrator.mjs
 ```
 
 ## Configuration
@@ -194,6 +197,10 @@ BASE_URL=http://127.0.0.1:3803 node e2e/tools.mjs
 | `BETTER_AUTH_URL` | `http://localhost:$PORT` | Public URL of the app (email links, trusted origin). |
 | `SMTP_URL` / `MAIL_FROM` | _(empty)_ | Email delivery for verification and password reset. |
 | `REQUIRE_EMAIL_VERIFICATION` | `true` if SMTP is set | Require a confirmed email before first sign-in. |
+| `REDIS_URL` | _(empty)_ | Makes orchestration jobs durable (BullMQ) and lets `npm run worker` run them. Required for orchestration on Vercel. |
+| `ORCHESTRATION_WORKER` | `on` (`off` on Vercel) | Whether this server also runs orchestration jobs. `off` = it only queues them. |
+| `ORCHESTRATION_CONCURRENCY` / `WORKER_CONCURRENCY` | `2` / `4` | Parallel tasks per run / jobs per worker process. |
+| `ORCHESTRATION_RETRY_BASE_MS` | `2000` | First retry delay for a failed task (doubles; 3 attempts). |
 
 With no key the app runs in demo mode. If both keys are set it uses OpenAI unless `LLM_PROVIDER=gemini`. A reply that fails (bad key, quota, blocked prompt, timeout) is reported as an error with a user-safe reason; a **workflow step** that fails is reported as Failed and stops the run. `/api/health` reports the active provider.
 
@@ -220,6 +227,23 @@ The reply streams back as server-sent events: `stream` (text), `error`, `done`, 
 A workflow is a real pipeline: each step is a **separate model call made as a different agent** (plus a role instruction), and each step is given the user's task and the output of every step before it. Intermediate outputs stream into the Thought stream; the last step's output is the answer. If a step fails the run stops and that step shows Failed. Nothing is replaced with made-up output.
 
 There is **no live web access**. Research-style steps use the model's own knowledge and are told to flag what should be verified.
+
+## Orchestration (goal → plan → agents → combined answer)
+
+The **Orchestrator** page (signed in) takes a goal. A planner model splits it into up to 6 tasks, each assigned to one
+of the built-in agents, with dependencies between them. Independent tasks run in parallel; each task sees only the
+goal, its instruction and the results of the tasks it depends on. A final step combines the results into one answer
+that cites the tasks it used (`[T1]`), shown as clickable sources.
+
+* **Approvals.** A task that wants a tool reaching outside the server (reading web pages, web search) waits until you
+  (or a workspace admin) approve it. Rejecting skips that task and anything depending on it; the rest is still combined.
+* **Failures.** Temporary provider errors are retried with backoff (3 attempts). A task that still fails stops the run
+  with the reason, and **Retry** re-runs just that task and what was skipped because of it.
+* **Durability.** State lives in PostgreSQL. With `REDIS_URL`, jobs go through BullMQ and survive restarts; a separate
+  `npm run worker` process can run them. Without Redis they run inside the API server (labelled *not durable*): a
+  restart interrupts running tasks, and a recovery sweep re-runs them when the server is back.
+* **Cost.** A run is up to 8 model calls (plan, 6 tasks, synthesis), counted against the rate limit up front; each person
+  can have 3 runs in progress.
 
 ## Agent files
 
@@ -257,8 +281,11 @@ git remote add origin https://github.com/<you>/<repo>.git && git push -u origin 
 
 1. Import the repository at [vercel.com](https://vercel.com). `vercel.json` runs `npm run build`, publishes the built `public/` folder as **static output on the CDN**, and runs the Express app as a single function (`api/[...path].js` loads `server.js`) for every `/api/*` request.
 2. Settings → **Environment Variables**: add `GEMINI_API_KEY` (tick **Sensitive**) for live replies, then redeploy.
-3. Rate limiting on serverless: the built-in limiter keeps counters per instance, so it is only a speed bump. Add a rate-limit rule for `/api/chat` under **Firewall** (path equals `/api/chat`, 20 requests per 60 s per IP) and set a quota or spending cap with your model provider.
-4. After every deploy run the smoke test. It loads the real page, because a site can pass every HTTP check and still be blank:
+3. Orchestration cannot run inside Vercel functions (work would stop when the response ends). To use it with a Vercel
+   API, set `REDIS_URL` and run `npm run worker` on a long-running host (e.g. Railway) with the same variables;
+   otherwise the Orchestrator page explains why it is unavailable.
+4. Rate limiting on serverless: the built-in limiter keeps counters per instance, so it is only a speed bump. Add a rate-limit rule for `/api/chat` under **Firewall** (path equals `/api/chat`, 20 requests per 60 s per IP) and set a quota or spending cap with your model provider.
+5. After every deploy run the smoke test. It loads the real page, because a site can pass every HTTP check and still be blank:
 
 ```bash
 node e2e/smoke.mjs https://your-site.vercel.app
@@ -273,6 +300,11 @@ New → **Blueprint**, pick the repository (reads `render.yaml`). Add `GEMINI_AP
 ### Railway
 
 New Project → **Deploy from GitHub repo** (reads `railway.toml`), add the key under **Variables**, then **Generate Domain**.
+
+For durable orchestration add a **Redis** service, set `REDIS_URL` on the app from it, and (optionally, to keep long
+runs off the web process) add a second service from the same repository with the start command `npm run worker`, the
+same variables, and `ORCHESTRATION_WORKER=off` on the web service. Without a worker service the web service runs the
+jobs itself.
 
 ### Docker
 

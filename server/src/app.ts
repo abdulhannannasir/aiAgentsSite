@@ -17,6 +17,8 @@ import { accountRouter } from './modules/workspaces/routes.js';
 import { createPlatform, type Platform } from './platform.js';
 import { createLLMService, type LLMService } from './modules/providers/llm.js';
 import { createToolRegistry, type ToolRegistry, type ToolRegistryOptions } from './modules/tools/registry.js';
+import { approvalsRouter, orchestrationsRouter } from './modules/orchestration/routes.js';
+import { setupOrchestration, type OrchestrationOverrides, type OrchestrationSetup } from './modules/orchestration/setup.js';
 import { validateWorkflows } from './modules/workflows/engine.js';
 import { v1Router } from './routes/v1.js';
 
@@ -37,6 +39,7 @@ export interface AppContext {
   llm: LLMService;
   tools: ToolRegistry;
   platform: Platform;
+  orchestration: OrchestrationSetup;
   /** Stops timers and closes the database pool so tests and graceful shutdown leave nothing running. */
   close: () => Promise<void>;
 }
@@ -49,6 +52,8 @@ export interface AppOptions {
   staticDir?: string | null;
   /** Tests: tool options (e.g. let url_fetch reach the local mock server). */
   tools?: Partial<ToolRegistryOptions>;
+  /** Tests: orchestration timings, Redis prefix, worker on/off. */
+  orchestration?: OrchestrationOverrides;
 }
 
 /** Builds the Express app. Used by server.js (local / Docker / Railway), the Vercel function and the tests. */
@@ -59,6 +64,7 @@ export function createApp(cfg: AppConfig, opts: AppOptions = {}): AppContext {
   const llm = createLLMService(cfg, log, tools, { demoDelay: opts.demoDelay });
   const limiter = new RateLimiter(cfg.limits.rateLimit.windowMs, cfg.limits.rateLimit.max);
   const platform = createPlatform(cfg, log);
+  const orchestration = setupOrchestration(cfg, platform, llm, tools, log, opts.orchestration);
 
   const app = express();
   app.set('trust proxy', cfg.trustProxy); // Render / Railway / Fly / Vercel sit behind one proxy
@@ -79,16 +85,22 @@ export function createApp(cfg: AppConfig, opts: AppOptions = {}): AppContext {
   app.get('/healthz', (_req, res) => res.type('text').send('ok'));
 
   app.use('/api', originGuard([cfg.auth.baseUrl, ...cfg.corsOrigins]), attachAuth(platform, log));
-  const api = v1Router({ cfg, log, llm, tools, limiter, version: readVersion(), platform });
+  const api = v1Router({ cfg, log, llm, tools, limiter, version: readVersion(), platform, orchestration: orchestration.status });
   app.use('/api/v1', accountRouter(platform, log));
   app.use('/api/v1/custom-agents', customAgentsRouter(platform, log, llm));
   app.use('/api/v1/conversations', conversationsRouter(platform, log));
   app.use('/api/v1/marketplace', marketplaceRouter(platform, log));
   app.use('/api/v1/executions', executionsRouter(platform, log));
+  const { orchestrator, status } = orchestration;
+  app.use('/api/v1/orchestrations', orchestrationsRouter({ platform, log, limiter, orchestrator, reason: status.reason }));
+  app.use('/api/v1/approvals', approvalsRouter({ platform, log, orchestrator, reason: status.reason }));
   app.use('/api/v1', api);
   app.use('/api', api); // unversioned aliases, kept for existing clients
   app.use('/api', apiNotFound);
   app.use(errorHandler(log));
 
-  return { app, cfg, log, llm, tools, platform, close: async () => { limiter.close(); await platform.close(); } };
+  return {
+    app, cfg, log, llm, tools, platform, orchestration,
+    close: async () => { limiter.close(); await orchestration.orchestrator?.close(); await platform.close(); }
+  };
 }

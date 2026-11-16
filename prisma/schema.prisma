@@ -30,19 +30,22 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  sessions      Session[]
-  accounts      Account[]
-  memberships   Member[]
-  invitations   Invitation[]
-  agents        Agent[]          @relation("AgentCreator")
-  agentVersions AgentVersion[]
-  conversations Conversation[]
-  executions    AgentExecution[]
-  notifications Notification[]
-  usage         UsageRecord[]
-  auditLogs     AuditLog[]
-  favorites     AgentFavorite[]
-  reviews       AgentReview[]
+  sessions           Session[]
+  accounts           Account[]
+  memberships        Member[]
+  invitations        Invitation[]
+  agents             Agent[]           @relation("AgentCreator")
+  agentVersions      AgentVersion[]
+  conversations      Conversation[]
+  executions         AgentExecution[]
+  notifications      Notification[]
+  usage              UsageRecord[]
+  auditLogs          AuditLog[]
+  favorites          AgentFavorite[]
+  reviews            AgentReview[]
+  orchestrations     Orchestration[]
+  approvalsRequested ApprovalRequest[] @relation("ApprovalRequester")
+  approvalsDecided   ApprovalRequest[] @relation("ApprovalDecider")
 
   @@map("users")
 }
@@ -109,14 +112,16 @@ model Organization {
   metadata  String?
   createdAt DateTime @default(now())
 
-  members       Member[]
-  invitations   Invitation[]
-  agents        Agent[]
-  conversations Conversation[]
-  executions    AgentExecution[]
-  usage         UsageRecord[]
-  auditLogs     AuditLog[]
-  notifications Notification[]
+  members        Member[]
+  invitations    Invitation[]
+  agents         Agent[]
+  conversations  Conversation[]
+  executions     AgentExecution[]
+  usage          UsageRecord[]
+  auditLogs      AuditLog[]
+  notifications  Notification[]
+  orchestrations Orchestration[]
+  approvals      ApprovalRequest[]
 
   @@map("workspaces")
 }
@@ -156,7 +161,7 @@ model Invitation {
 // ============================================================ agents
 
 enum AgentVisibility {
-  PRIVATE   // only the creator sees it
+  PRIVATE // only the creator sees it
   WORKSPACE // every member of the workspace sees it
 }
 
@@ -269,19 +274,19 @@ enum MessageStatus {
 }
 
 model Message {
-  id             String        @id @default(cuid())
+  id             String          @id @default(cuid())
   conversationId String
-  conversation   Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation   Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   role           MessageRole
   content        String
-  status         MessageStatus @default(DONE)
+  status         MessageStatus   @default(DONE)
   error          String?
   /// Workflow steps as shown in the thought stream: [{ id, role, agentName, label, status, output }]
   trace          Json?
   workflowId     String?
-  executionId    String?       @unique
+  executionId    String?         @unique
   execution      AgentExecution? @relation(fields: [executionId], references: [id], onDelete: SetNull)
-  createdAt      DateTime      @default(now())
+  createdAt      DateTime        @default(now())
 
   @@index([conversationId, createdAt])
   @@map("messages")
@@ -364,6 +369,7 @@ enum UsageKind {
   INPUT_TOKENS
   OUTPUT_TOKENS
   WORKFLOW_RUN
+  ORCHESTRATION_RUN
 }
 
 /// Append-only metering, the basis for analytics (Phase 9) and plan limits (Phase 10).
@@ -383,6 +389,135 @@ model UsageRecord {
 
   @@index([workspaceId, kind, occurredAt])
   @@map("usage_records")
+}
+
+// ============================================================ orchestration (Phase 5)
+
+enum OrchestrationStatus {
+  PLANNING
+  RUNNING
+  SYNTHESIZING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+/// A goal broken into a plan of tasks (a DAG) that several agents work through, then one synthesised answer.
+/// The database is the source of truth; the job queue (BullMQ, or in-process without Redis) only carries work.
+model Orchestration {
+  id             String              @id @default(cuid())
+  workspaceId    String
+  workspace      Organization        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  userId         String?
+  user           User?               @relation(fields: [userId], references: [id], onDelete: SetNull)
+  goal           String
+  status         OrchestrationStatus @default(PLANNING)
+  /// Planner's reasoning summary shown with the plan
+  planSummary    String?
+  output         String?
+  error          String?
+  /// Task keys the final answer cites, in order of first citation
+  sources        String[]
+  /// Client-supplied Idempotency-Key: the same key returns the same orchestration
+  idempotencyKey String?
+  /// true when jobs ran through Redis (survive restarts); false = in-process
+  durable        Boolean             @default(false)
+  provider       String
+  model          String?
+  modelCalls     Int                 @default(0)
+  inputTokens    Int?
+  outputTokens   Int?
+  startedAt      DateTime            @default(now())
+  endedAt        DateTime?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  tasks     OrchestrationTask[]
+  approvals ApprovalRequest[]
+
+  @@unique([workspaceId, idempotencyKey])
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([status, updatedAt])
+  @@map("orchestrations")
+}
+
+enum TaskStatus {
+  PENDING // waiting for its dependencies
+  WAITING_APPROVAL // needs a person to allow its tools
+  QUEUED // handed to the queue
+  RUNNING
+  SUCCEEDED
+  FAILED // out of attempts (or a permanent error): the dead-letter state, retryable by hand
+  SKIPPED // a dependency failed or its approval was rejected
+  CANCELLED
+}
+
+model OrchestrationTask {
+  id              String        @id @default(cuid())
+  orchestrationId String
+  orchestration   Orchestration @relation(fields: [orchestrationId], references: [id], onDelete: Cascade)
+  /// T1, T2, ... unique within the orchestration
+  key             String
+  title           String
+  agentId         String
+  instruction     String
+  tools           String[]
+  dependsOn       String[]
+  status          TaskStatus    @default(PENDING)
+  attempt         Int           @default(0)
+  maxAttempts     Int           @default(3)
+  /// A worker owns the task until this time; an expired lease means the worker died and the task is recovered
+  leaseUntil      DateTime?
+  /// Earliest time of the next attempt (retry backoff)
+  runAfter        DateTime?
+  output          String?
+  error           String?
+  /// Tool calls made: [{ tool, ok, summary, durationMs }]
+  toolCalls       Json?
+  modelCalls      Int           @default(0)
+  inputTokens     Int?
+  outputTokens    Int?
+  startedAt       DateTime?
+  endedAt         DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  approval ApprovalRequest?
+
+  @@unique([orchestrationId, key])
+  @@index([status, leaseUntil])
+  @@map("orchestration_tasks")
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// A person must allow a task to use tools that reach outside the server before it runs.
+model ApprovalRequest {
+  id              String            @id @default(cuid())
+  workspaceId     String
+  workspace       Organization      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  orchestrationId String
+  orchestration   Orchestration     @relation(fields: [orchestrationId], references: [id], onDelete: Cascade)
+  taskId          String            @unique
+  task            OrchestrationTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  requestedById   String?
+  requestedBy     User?             @relation("ApprovalRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  tools           String[]
+  reason          String
+  status          ApprovalStatus    @default(PENDING)
+  decidedById     String?
+  decidedBy       User?             @relation("ApprovalDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt       DateTime?
+  note            String?
+  createdAt       DateTime          @default(now())
+
+  @@index([workspaceId, status, createdAt(sort: Desc)])
+  @@map("approval_requests")
 }
 
 // ============================================================ audit and notifications
