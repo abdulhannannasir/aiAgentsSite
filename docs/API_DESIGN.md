@@ -145,6 +145,24 @@ Run statuses: `PLANNING → RUNNING → SYNTHESIZING → COMPLETED`, or `FAILED`
 error), `SKIPPED` (a dependency did not complete, or the approval was rejected), `CANCELLED`. Clients poll `GET /:id`
 while a run is active (an SSE event bus arrives with Phase 9).
 
+### Phase 6 (workflow studio) — implemented
+
+| Method | Path | Auth | Description |
+| --- | --- | --- | --- |
+| GET | `/api/v1/studio/node-types` | – | step types (with availability and reasons), agents, tools, and the validation context |
+| GET | `/api/v1/studio/templates` | – | 6 template graphs (+ their validation issues) |
+| POST | `/api/v1/studio/validate` | – | `{ graph }` → `{ graph, issues: [{ severity, message, nodeId?, edgeId? }] }` |
+| GET / POST | `/api/v1/studio/workflows` | ✓ | list (workspace) / create `{ name, description?, templateId? \| graph? }` → version 1 |
+| GET / PATCH / DELETE | `/api/v1/studio/workflows/:id` | ✓ | latest version with issues / rename / soft delete (creator or admin) |
+| GET / POST | `/api/v1/studio/workflows/:id/versions` | ✓ | history / save `{ graph, note?, baseVersion? }` (409 when `baseVersion` is not the latest; drafts with errors allowed, `valid: false`) |
+| GET | `/api/v1/studio/workflows/:id/versions/:v` | ✓ | one version |
+| POST / GET | `/api/v1/studio/workflows/:id/runs` | ✓ | run `{ input, version? }` (`Idempotency-Key`; 400 with the errors if the version is invalid) → an orchestration id; list runs |
+| POST | `/api/v1/orchestrations/:id/pause`, `/resume` | ✓ | starter or admin; 409 when not running / not paused |
+
+Graph shape: `{ nodes: [{ id, kind, label, position: { x, y }, config }], edges: [{ id, source, target, sourceHandle?: 'true' \| 'false' }] }`
+(max 25 steps, 60 connections). Runs appear in `/api/v1/orchestrations` with `workflow: { id, name, version }`, and each
+task carries `kind` and `nodeId`.
+
 ### Later phases (shape reserved)
 
 `/api/v1/executions/:id/events` (SSE) ·

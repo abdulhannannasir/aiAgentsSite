@@ -7,6 +7,11 @@ import { ProviderError, type ChatAgent, type ProviderErrorKind } from '../provid
 import type { ToolRegistry } from '../tools/registry.js';
 import { PlanError, citedKeys, demoPlan, extractJson, plannerPrompt, validatePlan, type Plan } from './plan.js';
 import type { Job, JobQueue } from './queue.js';
+import { compileGraph, evaluateCondition, extractPath, renderTemplate, type CompiledConfig, type ConditionOperator } from '../studio/graph.js';
+import { graphContext } from '../studio/context.js';
+
+/** A step that cannot succeed by trying again (bad JSON, a tool refused its input, ...). Shown to the user as is. */
+class StepError extends Error {}
 
 export interface OrchestratorOptions {
   /** Tasks of one orchestration that may run at the same time. */
@@ -45,8 +50,12 @@ export interface Orchestrator {
   readonly durable: boolean;
   /** Whether this process consumes jobs. Without a worker, durable jobs wait for `npm run worker`. */
   readonly worker: boolean;
-  start(actor: Actor, goal: string, idempotencyKey?: string | null): Promise<{ id: string; created: boolean }>;
+  /** Starts a planner run, or (with `workflow`) a run of a saved studio workflow version on `goal` as its input. */
+  start(actor: Actor, goal: string, idempotencyKey?: string | null, workflow?: { workflowId: string; workflowVersionId: string }): Promise<{ id: string; created: boolean }>;
   cancel(orchestrationId: string): Promise<boolean>;
+  /** No new tasks start while paused; running ones finish. */
+  pause(orchestrationId: string): Promise<boolean>;
+  resume(orchestrationId: string): Promise<boolean>;
   decide(approvalId: string, actor: Actor, approve: boolean, note?: string | null): Promise<'ok' | 'not_pending'>;
   retryTask(orchestrationId: string, taskKey: string): Promise<'ok' | 'not_failed'>;
   recover(): Promise<void>;
@@ -164,6 +173,10 @@ export function createOrchestrator(deps: {
       (await db.orchestration.updateMany({ where: { id: orch.id, status: 'PLANNING' }, data: { updatedAt: new Date() } })).count === 1);
     const usage = noUsage();
     let result: Plan;
+    if (orch.workflowVersionId) {
+      stop(); untrack();
+      return planFromWorkflow(orch.id, orch.workflowVersionId);
+    }
     try {
       if (llm.provider === 'demo') {
         result = demoPlan(orch.goal);
@@ -207,6 +220,33 @@ export function createOrchestrator(deps: {
     if (saved) await advance(orch.id);
   }
 
+  /** Studio runs: the plan is the saved graph, compiled into tasks (no model call). */
+  async function planFromWorkflow(orchestrationId: string, versionId: string) {
+    const version = await db.workflowVersion.findUnique({ where: { id: versionId } });
+    let compiled;
+    try {
+      if (!version) throw new Error('The workflow version no longer exists.');
+      compiled = compileGraph(version.graph, graphContext(tools));
+    } catch (err) {
+      // The graph was valid when saved; this only happens if this server has fewer agents or tools now.
+      log.warn({ orchestrationId, err: errText(err) }, 'workflow could not be compiled');
+      await failOrchestration(orchestrationId, 'PLANNING', `${errText(err)} Open the workflow in the studio to fix it.`.slice(0, 2000));
+      return;
+    }
+    const saved = await db.$transaction(async tx => {
+      const moved = await tx.orchestration.updateMany({ where: { id: orchestrationId, status: 'PLANNING' }, data: { status: 'RUNNING', planSummary: `Workflow version ${version!.version}` } });
+      if (moved.count !== 1) return false;
+      await tx.orchestrationTask.createMany({
+        data: compiled.map(t => ({
+          orchestrationId, key: t.key, title: t.title, kind: t.kind, nodeId: t.nodeId, config: t.config as unknown as Prisma.InputJsonValue,
+          agentId: t.agentId, instruction: t.instruction, tools: t.tools, dependsOn: t.dependsOn, maxAttempts: t.kind === 'agent' || t.kind === 'llm' ? MAX_ATTEMPTS : 1
+        }))
+      });
+      return true;
+    });
+    if (saved) await advance(orchestrationId);
+  }
+
   // ------------------------------------------------------------------ scheduling
 
   /**
@@ -223,22 +263,42 @@ export function createOrchestrator(deps: {
       const status = new Map(orch.tasks.map(t => [t.key, t.status as string]));
       let active = orch.tasks.filter(t => t.status === 'QUEUED' || t.status === 'RUNNING').length;
 
+      const output = new Map(orch.tasks.map(t => [t.key, t.output]));
+      const title = new Map(orch.tasks.map(t => [t.key, t.title]));
       for (const t of [...orch.tasks].sort((a, b) => Number(a.key.slice(1)) - Number(b.key.slice(1)))) {
         if (t.status !== 'PENDING') continue;
-        const blocked = t.dependsOn.find(d => ['FAILED', 'SKIPPED', 'CANCELLED'].includes(status.get(d) ?? ''));
-        if (blocked) {
-          await tx.orchestrationTask.update({ where: { id: t.id }, data: { status: 'SKIPPED', error: `Skipped because ${blocked} did not complete.`, endedAt: new Date() } });
+        const cfg = t.config as CompiledConfig | null;
+        const join = cfg?.join ?? 'all';
+        // A dependency is ok (succeeded, and on the right branch if it is a condition), blocked, or still pending.
+        const state = (d: string): ['ok' | 'blocked' | 'waiting', string] => {
+          const s = status.get(d) ?? '';
+          const branch = cfg?.branches?.[d];
+          if (s === 'SUCCEEDED') return branch && output.get(d) !== branch ? ['blocked', `the condition “${title.get(d)}” took the other branch`] : ['ok', ''];
+          if (['FAILED', 'SKIPPED', 'CANCELLED'].includes(s)) return ['blocked', `${d} did not complete`];
+          return ['waiting', ''];
+        };
+        const states = t.dependsOn.map(state);
+        const skip = join === 'all' ? states.find(([s]) => s === 'blocked')
+          : !states.some(([s]) => s === 'waiting') && !states.some(([s]) => s === 'ok') ? states[0] : undefined;
+        if (skip) {
+          await tx.orchestrationTask.update({ where: { id: t.id }, data: { status: 'SKIPPED', error: `Skipped because ${skip[1]}.`, endedAt: new Date() } });
           status.set(t.key, 'SKIPPED');
           continue;
         }
-        if (!t.dependsOn.every(d => status.get(d) === 'SUCCEEDED')) continue;
-        const gated = needsApproval(tools, t.tools);
-        if (gated.length && t.approval?.status !== 'APPROVED') {
+        const ready = join === 'all' ? states.every(([s]) => s === 'ok') : !states.some(([s]) => s === 'waiting');
+        if (!ready) continue;
+
+        // A human gate: the Approval step itself, or a task whose tools reach outside the server.
+        const gated = t.kind === 'approval' ? [] : needsApproval(tools, t.tools);
+        if ((t.kind === 'approval' || gated.length) && t.approval?.status !== 'APPROVED') {
           if (!t.approval) {
+            const message = String(cfg?.settings?.message ?? '').trim();
             await tx.approvalRequest.create({
               data: {
                 workspaceId: orch.workspaceId, orchestrationId: orch.id, taskId: t.id, requestedById: orch.userId, tools: gated,
-                reason: `${t.key} “${t.title}” wants to use ${gated.join(' and ')}, which sends requests to outside services and reads untrusted content.`
+                reason: t.kind === 'approval'
+                  ? (message ? renderTemplate(message, varsFor(orch.goal, orch.tasks, cfg)) : `“${t.title}” is waiting for your approval before the workflow continues.`).slice(0, 1000)
+                  : `${t.key} “${t.title}” wants to use ${gated.join(' and ')}, which sends requests to outside services and reads untrusted content.`
               }
             });
           }
@@ -247,15 +307,29 @@ export function createOrchestrator(deps: {
           continue;
         }
         if (active >= o.concurrencyPerRun) continue;
-        await tx.orchestrationTask.update({ where: { id: t.id }, data: { status: 'QUEUED', runAfter: null } });
+        const delayMs = t.kind === 'delay' ? Number(cfg?.settings?.seconds ?? 0) * 1000 : 0;
+        await tx.orchestrationTask.update({ where: { id: t.id }, data: { status: 'QUEUED', runAfter: delayMs ? new Date(Date.now() + delayMs) : null } });
         status.set(t.key, 'QUEUED');
         active++;
-        jobs.push(() => enqueueTask(t.id, t.attempt + 1));
+        jobs.push(() => enqueueTask(t.id, t.attempt + 1, delayMs));
       }
 
       const all = [...status.values()];
       if (!all.every(s => TERMINAL.has(s))) return;
       const failed = orch.tasks.filter(t => status.get(t.key) === 'FAILED').map(t => t.key);
+      if (orch.workflowVersionId && !failed.length) {
+        // Studio runs: the result is what the Output steps produced (no synthesis call).
+        const outputs = await tx.orchestrationTask.findMany({ where: { orchestrationId: orch.id, kind: 'output', status: 'SUCCEEDED' }, select: { key: true, output: true } });
+        outputs.sort((a, b) => Number(a.key.slice(1)) - Number(b.key.slice(1)));
+        const result = outputs.map(x => x.output ?? '').filter(x => x.trim()).join('\n\n');
+        await tx.orchestration.update({
+          where: { id: orch.id },
+          data: result
+            ? { status: 'COMPLETED', output: result.slice(0, MAX_OUTPUT_CHARS), sources: outputs.map(x => x.key), error: null, endedAt: new Date() }
+            : { status: 'FAILED', error: 'No Output step produced a result (every path to an Output was skipped or empty).', endedAt: new Date() }
+        });
+        return;
+      }
       if (failed.length) {
         await tx.orchestration.update({ where: { id: orch.id }, data: { status: 'FAILED', endedAt: new Date(), error: `${failed.join(', ')} failed after ${MAX_ATTEMPTS} attempts or with a permanent error. Retry ${failed.length > 1 ? 'them' : 'it'} to continue.` } });
       } else if (!all.includes('SUCCEEDED')) {
@@ -270,6 +344,52 @@ export function createOrchestrator(deps: {
 
   // ------------------------------------------------------------------ tasks
 
+  const succeededTasks = (orchestrationId: string) =>
+    db.orchestrationTask.findMany({ where: { orchestrationId, status: 'SUCCEEDED' }, select: { key: true, title: true, nodeId: true, output: true } });
+
+  /** Template values: {{input}} is the run input; {{node_id}} the result of that (upstream) step, if it ran. */
+  function varsFor(goal: string, done: Array<{ key: string; nodeId?: string | null; output: string | null; status?: string }>, cfg: CompiledConfig | null): Record<string, string> {
+    const values: Record<string, string> = { input: goal };
+    const byKey = new Map(done.filter(t => !t.status || t.status === 'SUCCEEDED').map(t => [t.key, t.output ?? '']));
+    for (const [nodeId, key] of Object.entries(cfg?.vars ?? {})) if (byKey.has(key)) values[nodeId] = byKey.get(key)!;
+    return values;
+  }
+
+  /** Steps that run without a model: they transform data, call one tool, branch, or pass their input on. */
+  async function runStep(task: { id: string; orchestrationId: string; kind: string; title: string; dependsOn: string[]; tools: string[] }, cfg: CompiledConfig, goal: string,
+    signal: AbortSignal, onTool: (ev: { tool: string; ok: boolean; summary: string; durationMs: number }) => void): Promise<string> {
+    const done = await succeededTasks(task.orchestrationId);
+    const vars = varsFor(goal, done, cfg);
+    const s = cfg.settings;
+    const sep = typeof s.separator === 'string' ? s.separator : '\n\n';
+    const merged = done.filter(t => task.dependsOn.includes(t.key)).sort((a, b) => Number(a.key.slice(1)) - Number(b.key.slice(1))).map(t => t.output ?? '').join(sep);
+    const tpl = (field: string, fallback: string) => { const t = String(s[field] ?? '').trim(); return t ? renderTemplate(t, vars) : fallback; };
+    switch (cfg.kind) {
+      case 'input': return goal;
+      case 'template': return renderTemplate(String(s.text ?? ''), vars);
+      case 'merge': case 'delay': case 'approval': return merged;
+      case 'output': return tpl('template', merged);
+      case 'condition': {
+        try { return String(evaluateCondition(tpl('source', merged), s.operator as ConditionOperator, String(s.value ?? ''), !!s.caseSensitive)); }
+        catch { throw new StepError('The condition\'s pattern is not a valid regular expression.'); }
+      }
+      case 'extract': {
+        try { return extractPath(tpl('source', merged), String(s.path)); }
+        catch (err) { throw new StepError(errText(err)); }
+      }
+      case 'tool': {
+        const def = tools.forAgent([String(s.toolId)])[0];
+        if (!def) throw new StepError(`The tool ${String(s.toolId)} is not available on this server.`);
+        const args = Object.fromEntries(Object.entries((s.args as Record<string, string>) ?? {}).map(([k, v]) => [k, renderTemplate(v, vars)]));
+        const r = await tools.run(def, args, { signal, log });
+        onTool({ tool: def.id, ok: r.ok, summary: r.summary, durationMs: r.durationMs });
+        if (!r.ok) throw new StepError(`${def.label}: ${r.summary}`);
+        return r.output;
+      }
+      default: throw new StepError(`Unknown step type ${cfg.kind}.`);
+    }
+  }
+
   async function runTask(taskId: string) {
     const now = new Date();
     const claimed = await db.orchestrationTask.updateMany({
@@ -280,9 +400,10 @@ export function createOrchestrator(deps: {
     const task = await db.orchestrationTask.findUniqueOrThrow({ where: { id: taskId }, include: { orchestration: true } });
     const orch = task.orchestration;
     const attempt = task.attempt;
-    const def = findAgent(task.agentId)!;
+    const def = findAgent(task.agentId);
     const inputs = task.dependsOn.length
-      ? await db.orchestrationTask.findMany({ where: { orchestrationId: orch.id, key: { in: task.dependsOn }, status: 'SUCCEEDED' }, select: { key: true, title: true, output: true } })
+      ? (await db.orchestrationTask.findMany({ where: { orchestrationId: orch.id, key: { in: task.dependsOn }, status: 'SUCCEEDED' }, select: { key: true, title: true, output: true } }))
+        .sort((a, b) => Number(a.key.slice(1)) - Number(b.key.slice(1)))
       : [];
 
     const controller = new AbortController();
@@ -290,7 +411,7 @@ export function createOrchestrator(deps: {
     const timeout = AbortSignal.timeout(o.taskTimeoutMs);
     const signal = AbortSignal.any([controller.signal, timeout]);
     const stop = heartbeat(controller, async () => (await db.orchestrationTask.updateMany({
-      where: { id: task.id, status: 'RUNNING', attempt, orchestration: { status: 'RUNNING' } },
+      where: { id: task.id, status: 'RUNNING', attempt, orchestration: { status: { in: ['RUNNING', 'PAUSED'] } } },
       data: { leaseUntil: new Date(Date.now() + o.leaseMs) }
     })).count === 1);
 
@@ -298,22 +419,38 @@ export function createOrchestrator(deps: {
     const toolCalls: Array<{ tool: string; ok: boolean; summary: string; durationMs: number }> = [];
     let text = '';
     let error: unknown = null;
+    const cfg = task.config as CompiledConfig | null;
+    const onTool = (ev: { tool: string; ok: boolean; summary: string; durationMs: number }) => toolCalls.push({ tool: ev.tool, ok: ev.ok, summary: ev.summary.slice(0, 300), durationMs: ev.durationMs });
     try {
-      if (llm.provider === 'demo') {
-        const demo = `Demo output for ${task.key} (${def.name}): in live mode this agent would ${task.title.charAt(0).toLowerCase()}${task.title.slice(1)} for the goal.\n\n- Placeholder point one\n- Placeholder point two`;
+      if (cfg && task.kind !== 'agent' && task.kind !== 'llm') {
+        text = await runStep(task, cfg, orch.goal, signal, onTool);
+      } else if (llm.provider === 'demo') {
+        const who = def?.name ?? task.title;
+        const demo = `Demo output for ${task.key} (${who}): in live mode this ${def ? 'agent' : 'step'} would work on “${task.title}”.\n\n- Placeholder point one\n- Placeholder point two`;
         for await (const chunk of llm.demoText(demo, signal)) text += chunk;
+      } else if (cfg) {
+        // Studio steps: the prompt is the node's template (variables filled from upstream results), or, when it is
+        // empty, the run input plus the results of the step's direct inputs.
+        const vars = varsFor(orch.goal, await succeededTasks(orch.id), cfg);
+        const template = String(cfg.settings.prompt ?? '').trim();
+        const prompt = template ? renderTemplate(template, vars) : `Input:\n${orch.goal}` + inputs.map(i => `\n\n--- Result of “${i.title}” ---\n${(i.output ?? '').slice(0, o.maxContextChars)}`).join('');
+        const agent: ChatAgent = task.kind === 'agent'
+          ? { ...def!, tools: task.tools }
+          : { name: task.title, systemPrompt: String(cfg.settings.system ?? '').trim() || 'You are a careful, helpful assistant.', temperature: Number(cfg.settings.temperature ?? 0.7), tools: [] };
+        text = await runAgent(agent, prompt, signal, usage, task.kind === 'agent' && task.tools.length > 0, onTool);
       } else {
         // Least privilege: the agent sees the goal, its own instruction and ONLY the outputs of its dependencies.
         const prompt = `Overall goal (from the user):\n${orch.goal}\n\nYour task (${task.key}): ${task.title}\n${task.instruction}` +
           inputs.map(i => `\n\n--- Result of ${i.key} (${i.title}) ---\n${(i.output ?? '').slice(0, o.maxContextChars)}`).join('');
         const agent: ChatAgent = {
-          ...def, tools: task.tools,
-          systemPrompt: `${def.systemPrompt}\n\nYou are carrying out one task of a larger plan. Do only this task, thoroughly and concretely. Your output is passed to other agents, so skip greetings and filler. If something cannot be known without tools or data you do not have, say so instead of guessing.`
+          ...def!, tools: task.tools,
+          systemPrompt: `${def!.systemPrompt}\n\nYou are carrying out one task of a larger plan. Do only this task, thoroughly and concretely. Your output is passed to other agents, so skip greetings and filler. If something cannot be known without tools or data you do not have, say so instead of guessing.`
         };
-        text = await runAgent(agent, prompt, signal, usage, task.tools.length > 0, ev => toolCalls.push({ tool: ev.tool, ok: ev.ok, summary: ev.summary.slice(0, 300), durationMs: ev.durationMs }));
+        text = await runAgent(agent, prompt, signal, usage, task.tools.length > 0, onTool);
       }
       if (timeout.aborted) throw new ProviderError('timeout', `task took longer than ${o.taskTimeoutMs} ms`);
-      if (!controller.signal.aborted && !text.trim()) throw new ProviderError('empty', 'empty task output');
+      // Deterministic steps may legitimately produce empty text (e.g. a template of an empty value).
+      if (!controller.signal.aborted && !text.trim() && (!cfg || task.kind === 'agent' || task.kind === 'llm')) throw new ProviderError('empty', 'empty task output');
     } catch (err) {
       error = timeout.aborted && !(err instanceof ProviderError) ? new ProviderError('timeout', `task took longer than ${o.taskTimeoutMs} ms`) : err;
     } finally {
@@ -331,10 +468,10 @@ export function createOrchestrator(deps: {
       return advance(orch.id);
     }
 
-    const retryable = !(error instanceof ProviderError) || RETRYABLE.has(error.kind);
-    const message = error instanceof ProviderError ? error.userMessage : 'The task failed unexpectedly.';
-    if (!(error instanceof ProviderError)) log.error({ taskId: task.id, err: errText(error) }, 'task crashed');
-    else log.warn({ taskId: task.id, attempt, kind: error.kind }, 'task attempt failed');
+    const retryable = error instanceof StepError ? false : !(error instanceof ProviderError) || RETRYABLE.has(error.kind);
+    const message = error instanceof StepError ? error.message : error instanceof ProviderError ? error.userMessage : 'The task failed unexpectedly.';
+    if (!(error instanceof ProviderError) && !(error instanceof StepError)) log.error({ taskId: task.id, err: errText(error) }, 'task crashed');
+    else log.warn({ taskId: task.id, attempt, kind: error instanceof ProviderError ? error.kind : 'step' }, 'task attempt failed');
     if (retryable && attempt < task.maxAttempts) {
       const delay = o.retryBaseMs * 2 ** (attempt - 1);
       const moved = await db.orchestrationTask.updateMany({
@@ -405,7 +542,7 @@ export function createOrchestrator(deps: {
     durable: queue.durable,
     worker: deps.worker,
 
-    async start(actor, goal, idempotencyKey) {
+    async start(actor, goal, idempotencyKey, workflow) {
       if (idempotencyKey) {
         const existing = await db.orchestration.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId: actor.workspaceId, idempotencyKey } }, select: { id: true } });
         if (existing) return { id: existing.id, created: false };
@@ -413,7 +550,10 @@ export function createOrchestrator(deps: {
       let row: { id: string };
       try {
         row = await db.orchestration.create({
-          data: { workspaceId: actor.workspaceId, userId: actor.userId, goal, idempotencyKey: idempotencyKey ?? null, durable: queue.durable, provider: llm.provider, model: llm.model },
+          data: {
+            workspaceId: actor.workspaceId, userId: actor.userId, goal, idempotencyKey: idempotencyKey ?? null, durable: queue.durable, provider: llm.provider, model: llm.model,
+            workflowId: workflow?.workflowId ?? null, workflowVersionId: workflow?.workflowVersionId ?? null
+          },
           select: { id: true }
         });
       } catch (err) {
@@ -433,7 +573,7 @@ export function createOrchestrator(deps: {
       const ended = new Date();
       const moved = await db.$transaction(async tx => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${id}))`;
-        const r = await tx.orchestration.updateMany({ where: { id, status: { in: ['PLANNING', 'RUNNING', 'SYNTHESIZING'] } }, data: { status: 'CANCELLED', error: 'Cancelled.', endedAt: ended } });
+        const r = await tx.orchestration.updateMany({ where: { id, status: { in: ['PLANNING', 'RUNNING', 'PAUSED', 'SYNTHESIZING'] } }, data: { status: 'CANCELLED', error: 'Cancelled.', endedAt: ended } });
         if (r.count !== 1) return false;
         await tx.orchestrationTask.updateMany({ where: { orchestrationId: id, status: { in: ['PENDING', 'WAITING_APPROVAL', 'QUEUED', 'RUNNING'] } }, data: { status: 'CANCELLED', leaseUntil: null, endedAt: ended } });
         await tx.approvalRequest.updateMany({ where: { orchestrationId: id, status: 'PENDING' }, data: { status: 'CANCELLED', decidedAt: ended } });
@@ -441,6 +581,19 @@ export function createOrchestrator(deps: {
       });
       for (const c of local.get(id) ?? []) c.abort();
       return moved;
+    },
+
+    async pause(id) {
+      return (await db.orchestration.updateMany({ where: { id, status: 'RUNNING' }, data: { status: 'PAUSED' } })).count === 1;
+    },
+
+    async resume(id) {
+      if ((await db.orchestration.updateMany({ where: { id, status: 'PAUSED' }, data: { status: 'RUNNING' } })).count !== 1) return false;
+      // Queued tasks could not be claimed while paused: hand them to the queue again.
+      const queued = await db.orchestrationTask.findMany({ where: { orchestrationId: id, status: 'QUEUED' }, select: { id: true, attempt: true, runAfter: true } });
+      for (const t of queued) await enqueueTask(t.id, t.attempt + 1, t.runAfter ? Math.max(0, t.runAfter.getTime() - Date.now()) : 0);
+      await advance(id);
+      return true;
     },
 
     async decide(approvalId, actor, approve, note) {
@@ -451,10 +604,21 @@ export function createOrchestrator(deps: {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${a.orchestrationId}))`;
         const r = await tx.approvalRequest.updateMany({ where: { id: approvalId, status: 'PENDING' }, data: { status: approve ? 'APPROVED' : 'REJECTED', decidedById: actor.userId, decidedAt: now, note: note ?? null } });
         if (r.count !== 1) return null;
-        await tx.orchestrationTask.updateMany({
-          where: { id: a.taskId, status: 'WAITING_APPROVAL' },
-          data: approve ? { status: 'PENDING' } : { status: 'SKIPPED', error: 'A person rejected the tool use this task asked for.', endedAt: now }
-        });
+        const task = await tx.orchestrationTask.findUniqueOrThrow({ where: { id: a.taskId } });
+        if (task.kind === 'approval') {
+          // The Approval step itself: approving completes it and passes its input on.
+          const inputs = await tx.orchestrationTask.findMany({ where: { orchestrationId: a.orchestrationId, key: { in: task.dependsOn }, status: 'SUCCEEDED' }, select: { key: true, output: true } });
+          const passed = inputs.sort((x, y) => Number(x.key.slice(1)) - Number(y.key.slice(1))).map(i => i.output ?? '').join('\n\n');
+          await tx.orchestrationTask.updateMany({
+            where: { id: a.taskId, status: 'WAITING_APPROVAL' },
+            data: approve ? { status: 'SUCCEEDED', output: passed.slice(0, MAX_OUTPUT_CHARS), startedAt: a.createdAt, endedAt: now } : { status: 'SKIPPED', error: 'A person rejected this approval step.', endedAt: now }
+          });
+        } else {
+          await tx.orchestrationTask.updateMany({
+            where: { id: a.taskId, status: 'WAITING_APPROVAL' },
+            data: approve ? { status: 'PENDING' } : { status: 'SKIPPED', error: 'A person rejected the tool use this task asked for.', endedAt: now }
+          });
+        }
         return a.orchestrationId;
       });
       if (!result) return 'not_pending';

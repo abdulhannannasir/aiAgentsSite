@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { ArrowLeft, Check, Network, Play, RefreshCw, RotateCcw, ShieldAlert, Square, Wrench, X } from 'lucide-react';
+import { ArrowLeft, Check, Network, Pause, Play, RefreshCw, RotateCcw, ShieldAlert, Square, Workflow as WorkflowIcon, Wrench, X } from 'lucide-react';
 import { Button, LinkButton } from '../components/ui/Button';
 import { Badge, Card, CardTitle, EmptyState, ErrorState, PageHeader, Skeleton, Spinner, type Tone } from '../components/ui/Display';
 import { Field, Textarea } from '../components/ui/Form';
@@ -11,12 +11,12 @@ import {
   isActive, orchestrations, stagesOf,
   type ApprovalView, type OrchestrationStatus, type OrchestrationSummary, type OrchestrationTaskStatus, type OrchestrationTaskView, type OrchestrationView
 } from '../lib/orchestrations';
-import { authHref, orchestrationHref } from '../lib/route';
+import { authHref, orchestrationHref, studioHref } from '../lib/route';
 import { formatDuration, timeAgo } from '../lib/sessionStats';
 import { toolLabel } from '../lib/tools';
 
-const RUN_TONE: Record<OrchestrationStatus, Tone> = { PLANNING: 'accent', RUNNING: 'accent', SYNTHESIZING: 'accent', COMPLETED: 'success', FAILED: 'danger', CANCELLED: 'neutral' };
-const RUN_LABEL: Record<OrchestrationStatus, string> = { PLANNING: 'Planning', RUNNING: 'Running', SYNTHESIZING: 'Combining results', COMPLETED: 'Completed', FAILED: 'Failed', CANCELLED: 'Cancelled' };
+const RUN_TONE: Record<OrchestrationStatus, Tone> = { PLANNING: 'accent', RUNNING: 'accent', PAUSED: 'warning', SYNTHESIZING: 'accent', COMPLETED: 'success', FAILED: 'danger', CANCELLED: 'neutral' };
+const RUN_LABEL: Record<OrchestrationStatus, string> = { PLANNING: 'Planning', RUNNING: 'Running', PAUSED: 'Paused', SYNTHESIZING: 'Combining results', COMPLETED: 'Completed', FAILED: 'Failed', CANCELLED: 'Cancelled' };
 const TASK_TONE: Record<OrchestrationTaskStatus, Tone> = {
   PENDING: 'neutral', WAITING_APPROVAL: 'warning', QUEUED: 'neutral', RUNNING: 'accent', SUCCEEDED: 'success', FAILED: 'danger', SKIPPED: 'neutral', CANCELLED: 'neutral'
 };
@@ -42,7 +42,7 @@ function usePoll(fn: () => void, active: boolean, ms: number) {
 
 // ------------------------------------------------------------------ approvals
 
-function ApprovalControls({ a, onDone }: { a: ApprovalView; onDone: () => void }) {
+export function ApprovalControls({ a, onDone }: { a: ApprovalView; onDone: () => void }) {
   const { toast } = useToast();
   const [busy, setBusy] = useState<'approve' | 'reject' | null>(null);
   const decide = async (d: 'approve' | 'reject') => {
@@ -150,6 +150,9 @@ function RunView({ id }: { id: string }) {
 
   if (error && !run) return <ErrorState title="Could not load this orchestration" onRetry={load}>{error}</ErrorState>;
   if (!run) return <Skeleton className="h-64" />;
+  const act = async (fn: () => Promise<unknown>, done: string) => {
+    try { await fn(); toast(done, 'success'); load(); } catch (err) { toast(errText(err, 'That did not work.'), 'error'); }
+  };
   const cancel = async () => {
     setCancelling(true);
     try { await orchestrations.cancel(run.id); toast('Orchestration cancelled', 'success'); load(); }
@@ -165,12 +168,15 @@ function RunView({ id }: { id: string }) {
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted">Goal</p>
+            {run.workflow && <a href={studioHref(run.workflow.id, run.id)} className="mb-2 inline-flex items-center gap-1 text-xs text-accent hover:underline"><WorkflowIcon size={12} aria-hidden /> {run.workflow.name} · version {run.workflow.version ?? '?'} · open in the studio</a>}
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted">{run.workflow ? 'Input' : 'Goal'}</p>
             <p className="mt-1 whitespace-pre-wrap text-sm">{run.goal}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={RUN_TONE[run.status]}>{isActive(run.status) && <Spinner size={10} label="" />}{RUN_LABEL[run.status]}</Badge>
+            <Badge tone={RUN_TONE[run.status]}>{isActive(run.status) && run.status !== 'PAUSED' && <Spinner size={10} label="" />}{RUN_LABEL[run.status]}</Badge>
             {run.provider === 'demo' && <Badge tone="warning">Demo</Badge>}
+            {run.status === 'RUNNING' && run.canManage && <Button size="sm" icon={<Pause size={12} aria-hidden />} onClick={() => void act(() => orchestrations.pause(run.id), 'Paused: running tasks finish, no new ones start')}>Pause</Button>}
+            {run.status === 'PAUSED' && run.canManage && <Button size="sm" variant="primary" icon={<Play size={12} aria-hidden />} onClick={() => void act(() => orchestrations.resume(run.id), 'Resumed')}>Resume</Button>}
             {isActive(run.status) && run.canManage && <Button size="sm" variant="danger" icon={<Square size={12} aria-hidden />} disabled={cancelling} onClick={() => void cancel()}>Cancel</Button>}
           </div>
         </div>
@@ -294,7 +300,7 @@ function Home() {
                     <a href={orchestrationHref(r.id)} className="flex flex-col gap-1.5 px-4 py-3 transition hover:bg-hover sm:flex-row sm:items-center sm:gap-4" data-orchestration={r.id} data-status={r.status}>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium">{r.goal}</span>
-                        <span className="block text-xs text-muted">{r.tasks.total ? `${r.tasks.done} of ${r.tasks.total} tasks done` : 'Planning'}{!r.mine && r.user ? ` · ${r.user}` : ''}</span>
+                        <span className="block text-xs text-muted">{r.workflow ? `Workflow: ${r.workflow.name} · ` : ''}{r.tasks.total ? `${r.tasks.done} of ${r.tasks.total} tasks done` : 'Planning'}{!r.mine && r.user ? ` · ${r.user}` : ''}</span>
                       </span>
                       <span className="flex flex-wrap items-center gap-2 text-xs text-muted">
                         {r.tasks.waitingApproval > 0 && <Badge tone="warning">{r.tasks.waitingApproval} awaiting approval</Badge>}

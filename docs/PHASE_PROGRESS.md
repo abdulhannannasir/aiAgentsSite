@@ -10,7 +10,7 @@ Single source of truth for where the 12-phase build stands. Updated at the end o
 | 3 | Agent marketplace | ✅ Done (per-agent model choice moves to Phase 4, see below) |
 | 4 | Real AI execution engine | ✅ Done (sandboxed code execution deliberately not offered, see below) |
 | 5 | Multi-agent orchestration | ✅ Done (Redis/BullMQ path verified locally; no managed Redis deploy yet, see below) |
-| 6 | Visual workflow studio | ⚪ Not started |
+| 6 | Visual workflow studio | ✅ Done (planned step types shown disabled with the phase that builds them) |
 | 7 | Projects, memory, knowledge | ⚪ Not started |
 | 8 | Integrations | ⚪ Not started |
 | 9 | Command Center and activity | 🟡 Activity page with real execution history done early (Phase 4); live metrics/notifications pending |
@@ -314,3 +314,51 @@ configured).
 
 **Deferred** — the 4 fixed workflows still run inline in the chat request (they move onto this engine as templates in
 Phase 6); notifications for pending approvals (Phase 9 event bus / notifications); planner use of saved custom agents.
+
+### Phase 6 — visual workflow studio (2026-11-16)
+
+**Implemented**
+* **Editor** (`#/app/workflows/<id>`, React Flow): drag or click steps from a palette onto a zoomable, pannable canvas
+  with minimap and controls; connect handles by dragging (conditions have a green *true* and a red *false* handle);
+  select a step to edit it in the inspector; Delete removes the selected step or connection; unsaved-changes guard.
+* **11 working step types**: Manual input, Agent (any built-in agent, optional tools), Prompt (own instructions,
+  temperature), Tool (calculator, date/time, read a web page, web search, with templated arguments), Condition
+  (contains / equals / matches / empty / longer than…), Text template, Merge (wait for all, or continue with the
+  branches that ran), Extract JSON field, Approval (human gate), Delay, Output. **5 planned types** (knowledge search,
+  integration action, webhook and schedule triggers, run code) are shown disabled with the reason; validation rejects them.
+* **Variables**: `{{input}}` and `{{step_id}}` in prompts and templates, inserted with chips that list only upstream
+  steps; validation refuses a variable that is not upstream.
+* **Live validation** shared by the browser and the server (`server/src/modules/studio/graph.ts`): one input, at least
+  one output, no loops, every step reachable, branch handles, per-step settings, agents and tool permissions, tools
+  available on this server; warnings for steps that will ask for approval or lead nowhere. Issues list jumps to the step.
+* **Versions**: every save is an immutable, attributed version; a graph with errors can be saved as a draft but not
+  run; optimistic concurrency (409 when someone saved in between); any version can be loaded back and saved as the
+  latest; older valid versions can be run explicitly through the API.
+* **Execution through the Phase 5 engine**: a run compiles the saved graph into tasks (no planner call). Branches skip
+  the path not taken ("Skipped because the condition … took the other branch"), Merge/Output use any-join, data steps
+  run without a model, tool steps that reach outside the server and Approval steps wait for a person, Delay schedules
+  the next attempt, the result is the Output steps' text. Leases, retries (model steps), cancellation, recovery and
+  usage metering are inherited. **Pause / resume** (new `PAUSED` status): no new steps start; running ones finish.
+* **Run overlay**: the canvas colours each step by status while a run is open; selecting a step shows its result;
+  approvals, pause, resume and cancel are in the run panel; runs are listed per workflow and in the Orchestrator.
+* **Templates**: the 4 chat workflows re-expressed as graphs, plus "Support triage" (classifier → condition → two
+  branches → merge) and "Reviewed blog post" (draft → approval → polish). The chat workflows keep working as before.
+* **API**: `/api/v1/studio/node-types`, `/templates`, `/validate` (public); `/workflows` CRUD (soft delete),
+  `/versions`, `/runs`; `POST /api/v1/orchestrations/:id/pause|resume`.
+
+**Database changes** — migration `20261116000626_workflow_studio` (additive: `workflows`, `workflow_versions`, task
+`kind`/`nodeId`/`config`, orchestration `workflowId`/`workflowVersionId`, status `PAUSED`).
+
+**Tests** — typecheck ✅ · client unit 72/72 ✅ · server 172/172 ✅ (28 new: validation rules incl. loops, reachability,
+duplicates, planned kinds, agent/tool permissions, upstream-only variables, branch handles, regex; compilation order,
+branches, joins; condition operators; JSON extraction; against PostgreSQL: templates, drafts, version conflicts,
+branching runs, data steps incl. tool/extract/delay/multiple outputs, approval approve/reject, pause/resume, workspace
+isolation, soft delete keeping run history) · build ✅ · e2e studio 27/27 ✅ (new: build from scratch by dragging
+connections, variable chips, save, run with result on the canvas, versions, branch run, approval with pause/resume,
+lists, phone layout, guest mode) · orchestrator 22/22 ✅ · features 79/79 ✅ · visual 76/76 ✅ · shell 74/74 ✅ · smoke 9/9 ✅
+· accounts 27/27 ✅ · marketplace 14/14 ✅ · tools 15/15 ✅.
+
+**Test fix** — the orchestrator e2e checked for the empty state before the list had loaded; it now waits for it.
+
+**Deferred** — retrying a failed step from the studio's run panel (available from the full run details page), step
+copy/paste and undo, the chat's `/command` workflows running on this engine, planned step types (Phases 7–8).

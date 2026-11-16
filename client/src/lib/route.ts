@@ -30,6 +30,8 @@ export interface Route {
   agentId?: string;
   /** #/app/orchestrator/<id>: one orchestration. */
   orchestrationId?: string;
+  /** #/app/workflows/<id>: a workflow open in the studio (optionally ?run=<orchestration id>). */
+  workflowId?: string;
 }
 
 const isPage = (s: string): s is PageId => (PAGE_IDS as readonly string[]).includes(s);
@@ -46,6 +48,8 @@ export function parseRoute(hash: string): Route {
   if (d) return { view: 'app', page: 'discover', unknown: false, agentId: d[1] };
   const o = /^#\/app\/orchestrator\/([A-Za-z0-9_-]{1,64})\/?$/.exec(hash);
   if (o) return { view: 'app', page: 'orchestrator', unknown: false, orchestrationId: o[1] };
+  const w = /^#\/app\/workflows\/([A-Za-z0-9_-]{1,64})\/?(?:\?(.*))?$/.exec(hash);
+  if (w) return { view: 'app', page: 'workflows', unknown: false, workflowId: w[1], params: Object.fromEntries(new URLSearchParams(w[2] ?? '')) };
   const m = /^#\/app(?:\/([^/?#]*))?\/?(?:[?].*)?$/.exec(hash);
   if (!m) {
     // Anything else under #/app/ is a broken or old link inside the app: show "not found", not the landing page.
@@ -85,6 +89,7 @@ function setHash(target: string) {
 
 export const authHref = (p: AuthPageId) => `#/auth/${p}`;
 export const agentHref = (id: string) => `#/app/agent/${encodeURIComponent(id)}`;
+export const studioHref = (id: string, runId?: string) => `#/app/workflows/${encodeURIComponent(id)}${runId ? `?run=${encodeURIComponent(runId)}` : ''}`;
 export const orchestrationHref = (id?: string) => (id ? `#/app/orchestrator/${encodeURIComponent(id)}` : '#/app/orchestrator');
 export const goAuth = (p: AuthPageId) => setHash(authHref(p));
 

@@ -11,11 +11,13 @@ import type { Platform } from '../../platform.js';
 import { findAgent } from '../agents/registry.js';
 import { audit } from '../audit/audit.js';
 import { MAX_TASKS } from './plan.js';
+import { NODE_TYPES } from '../studio/graph.js';
 import type { Orchestrator } from './engine.js';
 
 /** A person may have this many orchestrations in progress at once. */
 export const MAX_ACTIVE_PER_USER = 3;
-const ACTIVE = ['PLANNING', 'RUNNING', 'SYNTHESIZING'] as const;
+const ACTIVE = ['PLANNING', 'RUNNING', 'PAUSED', 'SYNTHESIZING'] as const;
+export const workflowInclude = { workflow: { select: { id: true, name: true } }, workflowVersion: { select: { version: true } } } as const;
 
 /** Members see their own orchestrations; workspace owners and admins see everyone's in the workspace. */
 const visible = (ctx: AuthContext) => ({ workspaceId: ctx.workspaceId, ...(canManage(ctx.workspaceRole) ? {} : { userId: ctx.user.id }) });
@@ -39,7 +41,7 @@ async function load(db: Db, ctx: AuthContext, id: string) {
   return db.orchestration.findFirst({
     where: { id, ...visible(ctx) },
     include: {
-      user: { select: { name: true } },
+      user: { select: { name: true } }, ...workflowInclude,
       tasks: { include: { approval: { include: { requestedBy: { select: { name: true } }, decidedBy: { select: { name: true } } } } } }
     }
   });
@@ -48,9 +50,10 @@ async function load(db: Db, ctx: AuthContext, id: string) {
 type Loaded = NonNullable<Awaited<ReturnType<typeof load>>>;
 const byKey = (a: { key: string }, b: { key: string }) => Number(a.key.slice(1)) - Number(b.key.slice(1));
 
-function summary(o: Omit<Loaded, 'tasks'> & { tasks: Array<{ status: string }> }, ctx: AuthContext): OrchestrationSummary {
+export function summary(o: Omit<Loaded, 'tasks'> & { tasks: Array<{ status: string }> }, ctx: AuthContext): OrchestrationSummary {
   return {
-    id: o.id, goal: o.goal, status: o.status, durable: o.durable, provider: o.provider, model: o.model, modelCalls: o.modelCalls,
+    id: o.id, goal: o.goal,
+    workflow: o.workflowId ? { id: o.workflowId, name: o.workflow?.name ?? 'Deleted workflow', version: o.workflowVersion?.version ?? null } : null, status: o.status, durable: o.durable, provider: o.provider, model: o.model, modelCalls: o.modelCalls,
     inputTokens: o.inputTokens, outputTokens: o.outputTokens, error: o.error, user: o.user?.name ?? null, mine: o.userId === ctx.user.id,
     createdAt: o.createdAt.getTime(), endedAt: ms(o.endedAt),
     tasks: {
@@ -64,8 +67,10 @@ function summary(o: Omit<Loaded, 'tasks'> & { tasks: Array<{ status: string }> }
 function view(o: Loaded, ctx: AuthContext): OrchestrationView {
   const taskList: OrchestrationTaskView[] = [...o.tasks].sort(byKey).map(t => {
     const agent = findAgent(t.agentId);
+    const type = NODE_TYPES.find(n => n.kind === t.kind);
     return {
-      key: t.key, title: t.title, agentId: t.agentId, agentName: agent?.name ?? t.agentId, agentIcon: agent?.icon ?? '🤖', instruction: t.instruction,
+      key: t.key, title: t.title, kind: t.kind, nodeId: t.nodeId, agentId: t.agentId,
+      agentName: agent?.name ?? (t.kind === 'agent' ? t.agentId : type?.label ?? t.kind), agentIcon: agent?.icon ?? (t.kind === 'agent' ? '🤖' : '⚙️'), instruction: t.instruction,
       tools: t.tools, dependsOn: t.dependsOn, status: t.status, attempt: t.attempt, maxAttempts: t.maxAttempts, output: t.output, error: t.error,
       toolCalls: Array.isArray(t.toolCalls) ? (t.toolCalls as OrchestrationTaskView['toolCalls']) : [],
       modelCalls: t.modelCalls, inputTokens: t.inputTokens, outputTokens: t.outputTokens, startedAt: ms(t.startedAt), endedAt: ms(t.endedAt),
@@ -128,7 +133,7 @@ export function orchestrationsRouter(deps: { platform: Platform; log: Logger; li
       const ctx = authOf(res)!;
       const rows = await db().orchestration.findMany({
         where: visible(ctx), orderBy: { createdAt: 'desc' }, take: 30,
-        include: { user: { select: { name: true } }, tasks: { select: { status: true } } }
+        include: { user: { select: { name: true } }, ...workflowInclude, tasks: { select: { status: true } } }
       });
       res.set('Cache-Control', 'private, no-store');
       res.json(rows.map(o => summary(o, ctx)));
@@ -161,6 +166,18 @@ export function orchestrationsRouter(deps: { platform: Platform; log: Logger; li
       res.status(202).json({ cancelled: true });
     } catch (err) { next(err); }
   });
+
+  for (const action of ['pause', 'resume'] as const) {
+    r.post(`/:id/${action}`, async (req, res, next) => {
+      try {
+        const ctx = authOf(res)!;
+        const o = await manageable(ctx, req.params.id);
+        if (!(await orch()[action](o.id))) return next(new HttpError('CONFLICT', action === 'pause' ? 'Only a running orchestration can be paused.' : 'Only a paused orchestration can be resumed.'));
+        await audit(db(), log, { workspaceId: ctx.workspaceId, actorId: ctx.user.id, action: `orchestration.${action}d`, targetType: 'orchestration', targetId: o.id, ip: req.ip });
+        res.status(202).json({ status: action === 'pause' ? 'PAUSED' : 'RUNNING' });
+      } catch (err) { next(err); }
+    });
+  }
 
   r.post('/:id/tasks/:key/retry', async (req, res, next) => {
     try {

@@ -172,6 +172,7 @@ node e2e/mock-openai.mjs 3901 &
 BASE_URL=http://127.0.0.1:3803 node e2e/tools.mjs
 # orchestration (see the header of e2e/orchestrator.mjs)
 BASE_URL=http://127.0.0.1:3804 GUEST_URL=http://127.0.0.1:3801 node e2e/orchestrator.mjs
+BASE_URL=http://127.0.0.1:3804 GUEST_URL=http://127.0.0.1:3801 node e2e/studio.mjs
 ```
 
 ## Configuration
@@ -244,6 +245,16 @@ that cites the tasks it used (`[T1]`), shown as clickable sources.
   restart interrupts running tasks, and a recovery sweep re-runs them when the server is back.
 * **Cost.** A run is up to 8 model calls (plan, 6 tasks, synthesis), counted against the rate limit up front; each person
   can have 3 runs in progress.
+
+## Workflow studio
+
+**Workflows → New workflow** (or a template) opens a visual editor. Drag steps onto the canvas and connect them:
+Manual input, Agent, Prompt, Tool, Condition (true/false branches), Text template, Merge, Extract JSON field,
+Approval, Delay and Output. Prompts and templates pass results along with `{{input}}` and `{{step_id}}`. The editor
+checks the graph as you build it (loops, unconnected steps, missing settings, variables that aren't upstream, tools not
+available here), every save is a new version, and **Run** executes the saved version on the orchestration engine:
+the canvas shows each step's status and result, and approvals, pause, resume and cancel work from the run panel.
+Knowledge search, integration actions, webhook/schedule triggers and code steps are listed as coming later.
 
 ## Agent files
 

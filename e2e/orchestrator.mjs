@@ -38,7 +38,7 @@ await page.waitForSelector('h1:has-text("Command Center")', { timeout: 15000 });
 await page.getByRole('link', { name: 'Orchestrator' }).first().click();
 await page.waitForSelector('h1:has-text("Orchestrator")');
 check('Orchestrator is a ready page in the sidebar', page.url().endsWith('#/app/orchestrator'));
-check('empty state before the first run', await page.getByText('No orchestrations yet').isVisible());
+check('empty state before the first run', await page.getByText('No orchestrations yet').waitFor({ timeout: 8000 }).then(() => true, () => false));
 await page.getByRole('button', { name: 'Start' }).click();
 check('an empty goal is explained, not sent', await page.getByText('Describe the goal in a few words.').isVisible());
 

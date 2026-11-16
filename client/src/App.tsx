@@ -40,6 +40,7 @@ const PlannedPage = lazy(() => import('./pages/PlannedPage'));
 const AgentDetailPage = lazy(() => import('./pages/AgentDetailPage'));
 const ActivityPage = lazy(() => import('./pages/ActivityPage'));
 const OrchestratorPage = lazy(() => import('./pages/OrchestratorPage'));
+const StudioPage = lazy(() => import('./pages/StudioPage'));
 const AuthPage = lazy(() => import('./pages/AuthPage'));
 const NotFoundPage = lazy(() => import('./pages/PlannedPage').then(m => ({ default: m.NotFoundPage })));
 
@@ -536,7 +537,7 @@ export default function App() {
       case 'discover': return route.agentId ? <AgentDetailPage key={route.agentId} agentId={route.agentId} /> : <DiscoverPage />;
       case 'my-agents': return <MyAgentsPage />;
       case 'builder': return <BuilderPage />;
-      case 'workflows': return <WorkflowsPage />;
+      case 'workflows': return route.workflowId ? <StudioPage key={route.workflowId} workflowId={route.workflowId} runId={route.params?.run} /> : <WorkflowsPage />;
       case 'settings': return <SettingsPage />;
       case 'activity': return <ActivityPage />;
       case 'orchestrator': return <OrchestratorPage orchestrationId={route.orchestrationId} />;

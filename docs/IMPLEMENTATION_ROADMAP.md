@@ -87,7 +87,7 @@ or tool results; anything needing credentials ships as **awaiting configuration*
   least-privilege context passing, approvals for sensitive tools, result validation and synthesis with provenance.
 * Falls back to in-process execution when Redis is not configured (labelled as non-durable).
 
-## Phase 6 — Visual workflow studio
+## Phase 6 — Visual workflow studio ✅ (see PHASE_PROGRESS.md)
 
 * `@xyflow/react` canvas (zoom, pan, minimap, handles), 15 node types, validation, variable mapping, versions,
   run/pause/resume/cancel/retry through the Phase 5 engine, execution overlay. The 4 existing workflows become

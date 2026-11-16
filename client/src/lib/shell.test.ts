@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { NAV } from '../app/nav';
-import { PAGE_IDS, orchestrationHref, pageHref, parseRoute, parseView } from './route';
+import { PAGE_IDS, orchestrationHref, pageHref, parseRoute, parseView, studioHref } from './route';
 import { stagesOf } from './orchestrations';
 import { formatDuration, recentActivity, sessionStats, timeAgo } from './sessionStats';
 import type { Message } from '../types';
@@ -36,6 +36,12 @@ describe('parseRoute', () => {
     expect(parseRoute(orchestrationHref('cm123abc'))).toEqual({ view: 'app', page: 'orchestrator', unknown: false, orchestrationId: 'cm123abc' });
     expect(parseRoute(orchestrationHref())).toEqual({ view: 'app', page: 'orchestrator', unknown: false });
     expect(parseRoute('#/app/orchestrator/a/b')).toMatchObject({ unknown: true });
+  });
+
+  it('parses studio pages with an optional run', () => {
+    expect(parseRoute(studioHref('wf1'))).toEqual({ view: 'app', page: 'workflows', unknown: false, workflowId: 'wf1', params: {} });
+    expect(parseRoute(studioHref('wf1', 'run9'))).toMatchObject({ page: 'workflows', workflowId: 'wf1', params: { run: 'run9' } });
+    expect(parseRoute('#/app/workflows')).toEqual({ view: 'app', page: 'workflows', unknown: false });
   });
 
   it('chat stays at plain #/app', () => {

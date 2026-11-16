@@ -97,7 +97,7 @@ export interface MetaResponse {
 
 // ---------------------------------------------------------------- orchestration (Phase 5)
 
-export type OrchestrationStatus = 'PLANNING' | 'RUNNING' | 'SYNTHESIZING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type OrchestrationStatus = 'PLANNING' | 'RUNNING' | 'PAUSED' | 'SYNTHESIZING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 export type OrchestrationTaskStatus = 'PENDING' | 'WAITING_APPROVAL' | 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'SKIPPED' | 'CANCELLED';
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED';
 
@@ -121,6 +121,10 @@ export interface ApprovalView {
 export interface OrchestrationTaskView {
   key: string;
   title: string;
+  /** 'agent' for planner tasks; the studio node kind for workflow runs. */
+  kind: string;
+  /** The studio node this task ran (workflow runs). */
+  nodeId: string | null;
   agentId: string;
   agentName: string;
   agentIcon: string;
@@ -144,6 +148,8 @@ export interface OrchestrationTaskView {
 export interface OrchestrationSummary {
   id: string;
   goal: string;
+  /** Set for runs of a studio workflow. */
+  workflow: { id: string; name: string; version: number | null } | null;
   status: OrchestrationStatus;
   durable: boolean;
   provider: string;

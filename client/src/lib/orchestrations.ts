@@ -23,12 +23,14 @@ export const orchestrations = {
   list: () => call<OrchestrationSummary[]>('GET', '/api/v1/orchestrations'),
   get: (id: string) => call<OrchestrationView>('GET', `/api/v1/orchestrations/${enc(id)}`),
   cancel: (id: string) => call<{ cancelled: boolean }>('POST', `/api/v1/orchestrations/${enc(id)}/cancel`),
+  pause: (id: string) => call<{ status: string }>('POST', `/api/v1/orchestrations/${enc(id)}/pause`),
+  resume: (id: string) => call<{ status: string }>('POST', `/api/v1/orchestrations/${enc(id)}/resume`),
   retryTask: (id: string, key: string) => call<{ retried: boolean }>('POST', `/api/v1/orchestrations/${enc(id)}/tasks/${enc(key)}/retry`),
   approvals: () => call<ApprovalView[]>('GET', '/api/v1/approvals?status=PENDING'),
   decide: (approvalId: string, decision: 'approve' | 'reject') => call<ApprovalView>('POST', `/api/v1/approvals/${enc(approvalId)}`, { decision })
 };
 
-export const ACTIVE_STATUSES: OrchestrationStatus[] = ['PLANNING', 'RUNNING', 'SYNTHESIZING'];
+export const ACTIVE_STATUSES: OrchestrationStatus[] = ['PLANNING', 'RUNNING', 'PAUSED', 'SYNTHESIZING'];
 export const isActive = (s: OrchestrationStatus) => ACTIVE_STATUSES.includes(s);
 
 /**

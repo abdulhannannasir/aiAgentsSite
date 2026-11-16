@@ -18,6 +18,7 @@ import { createPlatform, type Platform } from './platform.js';
 import { createLLMService, type LLMService } from './modules/providers/llm.js';
 import { createToolRegistry, type ToolRegistry, type ToolRegistryOptions } from './modules/tools/registry.js';
 import { approvalsRouter, orchestrationsRouter } from './modules/orchestration/routes.js';
+import { studioRouter } from './modules/studio/routes.js';
 import { setupOrchestration, type OrchestrationOverrides, type OrchestrationSetup } from './modules/orchestration/setup.js';
 import { validateWorkflows } from './modules/workflows/engine.js';
 import { v1Router } from './routes/v1.js';
@@ -94,6 +95,7 @@ export function createApp(cfg: AppConfig, opts: AppOptions = {}): AppContext {
   const { orchestrator, status } = orchestration;
   app.use('/api/v1/orchestrations', orchestrationsRouter({ platform, log, limiter, orchestrator, reason: status.reason }));
   app.use('/api/v1/approvals', approvalsRouter({ platform, log, orchestrator, reason: status.reason }));
+  app.use('/api/v1/studio', studioRouter({ platform, log, tools, limiter, orchestrator, orchestrationReason: status.reason }));
   app.use('/api/v1', api);
   app.use('/api', api); // unversioned aliases, kept for existing clients
   app.use('/api', apiNotFound);
