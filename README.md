@@ -293,7 +293,7 @@ git remote add origin https://github.com/<you>/<repo>.git && git push -u origin 
 
 ### Vercel (free Hobby plan, no card)
 
-1. Import the repository at [vercel.com](https://vercel.com). `vercel.json` runs `npm run build`, publishes the built `public/` folder as **static output on the CDN**, and runs the Express app as a single function (`api/[...path].js` loads `server.js`) for every `/api/*` request.
+1. Import the repository at [vercel.com](https://vercel.com). `vercel.json` runs `npm run build`, publishes the built `public/` folder as **static output on the CDN**, and runs the Express app as a single function (`api/index.js` loads `server.js`), with a rewrite sending every `/api/*` request (including nested paths like `/api/v1/agents`) to it.
 2. Settings → **Environment Variables**: add `GEMINI_API_KEY` (tick **Sensitive**) for live replies, then redeploy.
 3. Orchestration cannot run inside Vercel functions (work would stop when the response ends). To use it with a Vercel
    API, set `REDIS_URL` and run `npm run worker` on a long-running host (e.g. Railway) with the same variables;

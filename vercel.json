@@ -3,8 +3,11 @@
   "buildCommand": "npm run build && npm run release",
   "outputDirectory": "public",
   "functions": {
-    "api/**/*.js": { "excludeFiles": "public/**", "includeFiles": "server/dist/**" }
+    "api/index.js": { "excludeFiles": "public/**", "includeFiles": "server/dist/**" }
   },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api" }
+  ],
   "headers": [
     {
       "source": "/(.*)",
