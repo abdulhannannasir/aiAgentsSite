@@ -1,14 +1,31 @@
-'use strict';
-
 // Multi-agent workflows. Each one is a real pipeline: every step is a separate model call made as one
 // of the registered agents (plus a role instruction), and each step sees the user's task and the output
 // of the steps before it. The last step's output is the answer; earlier outputs are shown in the
 // client's "Thought stream". Nothing here pretends to have tools the app doesn't have: there is no
 // live web access, so research steps rely on the model's own knowledge and say so.
 
+export interface WorkflowStepDefinition {
+  id: string;
+  agentId: string;
+  role: string;
+  label: string;
+  instruction: string;
+  final?: boolean;
+}
+
+export interface WorkflowDefinition {
+  id: string;
+  command: string;
+  name: string;
+  description: string;
+  icon: string;
+  promptStarter: string;
+  steps: WorkflowStepDefinition[];
+}
+
 const HONESTY = 'You have no live web or tool access; rely on well-established knowledge and clearly flag anything that should be verified.';
 
-const WORKFLOWS = [
+export const WORKFLOWS: WorkflowDefinition[] = [
   {
     id: 'research',
     command: '/research',
@@ -74,5 +91,3 @@ const WORKFLOWS = [
     ]
   }
 ];
-
-module.exports = { WORKFLOWS };

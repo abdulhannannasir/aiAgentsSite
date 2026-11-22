@@ -3,6 +3,8 @@
 buildCommand = "npm ci --include=dev && npm run build"
 
 [deploy]
+# Applies database migrations when DATABASE_URL is set; does nothing in guest mode.
+preDeployCommand = "npm run release"
 startCommand = "npm start"
 healthcheckPath = "/healthz"
 healthcheckTimeout = 100

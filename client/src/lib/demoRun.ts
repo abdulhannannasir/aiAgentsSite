@@ -42,6 +42,10 @@ export function applyEvent(view: RunView, e: ServerEvent, now: number): RunView 
       return { ...view, error: e.content };
     case 'done':
       return view;
+    // Saved-chat bookkeeping and single-agent tool calls: the demo runs a workflow, which shows neither.
+    case 'conversation':
+    case 'tool':
+      return view;
   }
 }
 

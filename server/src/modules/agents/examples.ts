@@ -1,0 +1,50 @@
+/**
+ * Example prompts for the built-in agents, shown on their detail pages as one-click starters.
+ * Every built-in agent must have at least two (enforced by a unit test).
+ */
+export const AGENT_EXAMPLES: Record<string, string[]> = {
+  'customer-support': ['A customer says their order arrived damaged. Draft a reply that apologises and offers a replacement or refund.', 'Write a short FAQ answer explaining how to reset a password.'],
+  'coding-assistant': ['Write a TypeScript function that debounces another function, with a short usage example.', 'Explain why this SQL query is slow and how to index it: SELECT * FROM orders WHERE customer_id = 42 ORDER BY created_at DESC;'],
+  'content-writer': ['Write a 150-word LinkedIn post announcing our new AI scheduling feature for small clinics.', 'Give me five blog post titles about remote team onboarding, each with a one-line angle.'],
+  'data-analyst': ['Suggest five KPIs for a subscription coffee business and how to calculate each one.', 'Write a SQL query for monthly active users from an events table (user_id, event_name, created_at).'],
+  'sales-agent': ['Write a three-line cold email to a logistics manager about cutting fuel costs with route planning software.', 'How should I respond when a prospect says "we already use a competitor"?'],
+  'social-media-manager': ['Plan a two-week Instagram content calendar for a neighbourhood bakery.', 'Write three caption options for a product launch post, one playful, one premium, one minimal.'],
+  'seo-specialist': ['Suggest 10 long-tail keywords for a page about "standing desks for small apartments".', 'Write a meta title and description for a pricing page of a project management tool.'],
+  'legal-reviewer': ['What should I look out for in a non-compete clause in an employment contract?', 'Summarise the risks in this clause: "Supplier may terminate this agreement at any time without notice."'],
+  'personal-assistant': ['Help me prioritise this week: finish a report, prepare a client pitch, renew my passport, plan a team lunch.', 'Draft a polite email declining a meeting invitation and proposing two alternative times.'],
+  'translator': ['Translate into Spanish, keeping a friendly tone: "Thanks for reaching out! We\'ll get back to you within a day."', 'Translate "Please find the signed contract attached" into French and German.'],
+  'research-agent': ['Compare the main players in the meal-kit delivery market and how they differentiate.', 'What are the key trends in electric bike adoption in European cities?'],
+  'hr-recruiter': ['Write an inclusive job description for a junior frontend developer.', 'Give me eight structured interview questions for a customer success manager role.'],
+  'ceo-assistant': ['Draft a one-page agenda for a quarterly board meeting of a seed-stage startup.', 'Help me structure an OKR set for a 20-person SaaS company for next quarter.'],
+  'operations-manager': ['Write an SOP for onboarding a new vendor, from request to first payment.', 'Map out where delays usually happen in an order-to-delivery process and how to measure them.'],
+  'financial-controller': ['Build a simple 12-month cash-flow template for a small agency, with the categories I should track.', 'How should I set up an expense approval policy for a team of 15?'],
+  'project-manager': ['Break a website redesign into two-week sprints with milestones and risks.', 'Write a RAID log template (risks, assumptions, issues, dependencies) for a product launch.'],
+  'supply-chain-agent': ['How do I calculate reorder points and safety stock for a product with variable demand?', 'List the questions I should ask when choosing a new freight forwarder.'],
+  'hr-manager': ['Create a 30-60-90 day onboarding plan for a new marketing manager.', 'Write a fair, structured template for a mid-year performance review.'],
+  'legal-researcher': ['Explain the difference between a warranty and an indemnity in commercial contracts.', 'What are the usual elements a court looks at to decide whether a contract was formed?'],
+  'contract-specialist': ['Review this NDA clause and flag one-sided terms: "The Recipient shall indemnify the Discloser for any and all losses."', 'What clauses should a simple freelance services agreement include?'],
+  'paralegal-support': ['Create a checklist for organising documents for a discovery request.', 'Draft a template email to a client requesting documents for an upcoming filing deadline.'],
+  'compliance-officer': ['What does a small online shop need to do to comply with GDPR when collecting email addresses?', 'Draft a short data retention policy outline for a 30-person company.'],
+  'litigation-support': ['Create a template for summarising a deposition transcript.', 'How should trial exhibits be numbered and indexed so they are easy to find?'],
+  'client-intake': ['Write five intake questions to qualify a potential family-law client.', 'Draft a consultation booking confirmation email for a law firm.'],
+  'finance-advisor': ['Help me build a monthly budget on a 3,000 income with rent of 1,100.', 'Explain the avalanche vs snowball methods for paying off debt, with an example.'],
+  'fitness-coach': ['Create a three-day beginner strength plan I can do at home with dumbbells.', 'Suggest a high-protein vegetarian meal plan for one day, around 2,000 calories.'],
+  'travel-planner': ['Plan a four-day itinerary in Lisbon for someone who likes food and architecture.', 'What should I pack for a two-week trip to Japan in autumn?'],
+  'home-manager': ['Make a seasonal home maintenance checklist for autumn.', 'What questions should I ask when getting quotes for a roof repair?'],
+  'wedding-planner': ['Create a 12-month wedding planning timeline for a 100-guest wedding.', 'Help me split a 20,000 wedding budget across the main categories.'],
+  'event-planner': ['Plan a two-hour corporate team-building event for 40 people.', 'Write a run-of-show for a small product launch evening.'],
+  'instagram-strategist': ['Suggest five Reels ideas for a skincare brand that show the product in use.', 'How should a new fitness coach account structure its first 30 posts?'],
+  'tiktok-growth': ['Write a 30-second TikTok script about three money-saving habits.', 'What posting schedule would you test for a small fashion brand on TikTok?'],
+  'linkedin-leader': ['Write a LinkedIn post sharing a lesson from a failed product launch, without sounding negative.', 'Draft a connection request message to a VP of engineering at a company I admire.'],
+  'youtube-strategist': ['Give me ten video ideas for a channel about personal finance for students.', 'Outline a 10-minute video script on "how to start budgeting", with a hook in the first 15 seconds.'],
+  'twitter-growth': ['Write a seven-post thread on lessons from building a side project.', 'Suggest a weekly content mix for a developer-tools founder on X.'],
+  'pinterest-manager': ['Suggest board names and pin ideas for a home-office decor blog.', 'Write five Pinterest pin descriptions for healthy breakfast recipes.'],
+  'meal-planner': ['Plan five weeknight dinners for a family of four on a tight budget, with a grocery list.', 'Give me a gluten-free meal plan for three days.'],
+  'gift-finder': ['Gift ideas under 50 for a friend who loves hiking and coffee.', 'What is a thoughtful retirement gift for a colleague who likes gardening?'],
+  'subscription-manager': ['Help me review my subscriptions and decide which to cancel: Netflix, Spotify, two gyms, a meal kit, cloud storage.', 'Write a polite message cancelling a gym membership.'],
+  'habit-coach': ['Help me build a habit of reading 20 minutes a day using habit stacking.', 'I keep skipping workouts after a week. How do I make the habit stick?'],
+  'language-partner': ['Let\'s practise ordering food in Italian. You are the waiter.', 'Explain when to use "ser" vs "estar" in Spanish, with examples.'],
+  'meditation-guide': ['Guide me through a five-minute breathing exercise for stress.', 'Give me a short wind-down routine to help me fall asleep.']
+};
+
+export const examplesFor = (agentId: string): string[] => AGENT_EXAMPLES[agentId] ?? [];

@@ -4,4 +4,12 @@ npm-debug.log*
 .DS_Store
 
 # Built front end (vite build writes here; Vercel/Render/Docker build it)
-public/
+/public/
+/server/dist/
+/server/src/generated/
+
+# Redis snapshots from a local redis-server
+dump.rdb
+
+# Local file storage (STORAGE_DIR default in development)
+/data/

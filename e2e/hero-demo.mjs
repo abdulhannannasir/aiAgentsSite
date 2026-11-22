@@ -9,6 +9,9 @@
 import { chromium } from 'playwright';
 import path from 'node:path';
 
+// The app calls the versioned API (/api/v1/chat); the unversioned /api/chat is an alias. Match either.
+const CHAT = /\/api(\/v1)?\/chat$/;
+
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:3801';
 const SHOTS = process.env.SHOTS_DIR || '';
 let pass = 0, fail = 0;
@@ -26,7 +29,7 @@ async function open(ctxOptions, url = '/?fx=off', setup) {
   page.chat = [];
   page.uncaught = [];
   page.on('pageerror', e => page.uncaught.push(e.message));
-  page.on('request', r => { if (r.method() === 'POST' && r.url().endsWith('/api/chat')) page.chat.push(JSON.parse(r.postData() || '{}')); });
+  page.on('request', r => { if (r.method() === 'POST' && CHAT.test(new URL(r.url()).pathname)) page.chat.push(JSON.parse(r.postData() || '{}')); });
   await setup?.(page);
   await page.goto(BASE + url, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-testid=hero-demo]');
@@ -124,12 +127,12 @@ const task = page => page.getByTestId('hero-demo-task');
   await waitPhase(page, 'done', 20000);
   const alertText = () => page.getByRole('alert').filter({ hasText: /./ }).first().innerText();
   const expectFailure = async (label, route, expect) => {
-    await page.route('**/api/chat', route);
+    await page.route(CHAT, route);
     await run(page).click();
     const ok = await waitPhase(page, 'failed', 8000);
     const msg = ok ? await alertText() : '';
     check(label, ok && expect.test(msg) && /failed/i.test(await text(page, 'hero-demo-badge')), msg);
-    await page.unroute('**/api/chat');
+    await page.unroute(CHAT);
     return ok;
   };
   await expectFailure('HTTP 500 with a reason: shows that reason and a Failed badge', r => r.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"boom"}' }), /boom/);
@@ -158,7 +161,7 @@ const task = page => page.getByTestId('hero-demo-task');
 
 // ============================================================ workflows never load: the sample still works, live runs are off
 {
-  const { ctx, page } = await open({}, '/?fx=off', p => p.route('**/api/workflows', r => r.fulfill({ status: 500, contentType: 'application/json', body: '{}' })));
+  const { ctx, page } = await open({}, '/?fx=off', p => p.route(/\/api(\/v1)?\/workflows$/, r => r.fulfill({ status: 500, contentType: 'application/json', body: '{}' })));
   check('workflows unavailable: the sample still replays', await waitPhase(page, 'done', 20000));
   check('...but the task field and Run are disabled, with no workflow chips', await task(page).isDisabled() && await run(page).isDisabled() && await page.getByRole('group', { name: 'Choose a workflow' }).locator('button').count() === 0);
   check('...and nothing was sent to the API', page.chat.length === 0);
