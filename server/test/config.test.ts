@@ -11,12 +11,13 @@ describe('loadConfig', () => {
     expect(cfg.port).toBe(3000);
     expect(cfg.limits.rateLimit).toEqual({ windowMs: 60_000, max: 20 });
     expect(cfg.gemini.models).toEqual(['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-2.5-flash']);
-    // In development, files go to ./data/uploads unless S3 or STORAGE_DIR is configured.
-    expect(cfg.features).toEqual({ database: false, auth: false, email: false, redis: false, storage: true });
-    expect(cfg.storage).toMatchObject({ driver: 'local', s3: null });
-    // Elsewhere there is no default: storage is off until configured.
-    expect(loadConfig({ NODE_ENV: 'production' }).storage.driver).toBeNull();
-    expect(loadConfig({ NODE_ENV: 'test' }).features.storage).toBe(false);
+    expect(cfg.features).toEqual({ database: false, auth: false, email: false, redis: false, storage: false });
+    // With a database, development keeps files in ./data/uploads unless S3 or STORAGE_DIR is configured…
+    expect(loadConfig({ DATABASE_URL: 'postgres://x' }).storage).toMatchObject({ driver: 'local', s3: null });
+    // …and elsewhere there is no default: storage is off until configured.
+    expect(loadConfig({ NODE_ENV: 'production', DATABASE_URL: 'postgres://x' }).storage.driver).toBeNull();
+    expect(loadConfig({ NODE_ENV: 'test', DATABASE_URL: 'postgres://x' }).features.storage).toBe(false);
+    expect(loadConfig({ NODE_ENV: 'production', DATABASE_URL: 'postgres://x', STORAGE_DIR: '/srv/files' }).storage).toMatchObject({ driver: 'local', dir: '/srv/files' });
   });
 
   it('follows whichever key is set, OpenAI first, and LLM_PROVIDER can force one', () => {

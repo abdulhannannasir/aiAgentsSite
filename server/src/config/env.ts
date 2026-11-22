@@ -81,7 +81,7 @@ const EnvSchema = z.object({
   S3_ACCESS_KEY_ID: optionalString,
   S3_SECRET_ACCESS_KEY: optionalString,
   S3_FORCE_PATH_STYLE: z.preprocess(blankToUndefined, z.enum(['true', 'false']).optional()),
-  // Without S3: files are kept in this directory (NODE_ENV=development default: ./data/uploads; never use on serverless hosts).
+  // Without S3: files are kept in this directory (NODE_ENV=development with DATABASE_URL defaults to ./data/uploads; never use on serverless hosts).
   STORAGE_DIR: optionalString,
   MAX_UPLOAD_MB: num(10),
   // Embeddings for semantic memory search. Default: the provider whose key is set (OpenAI first). none = keyword search only.
@@ -194,7 +194,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     : e.EMBEDDING_PROVIDER === 'openai' ? (e.OPENAI_API_KEY ? 'openai' : null)
     : e.EMBEDDING_PROVIDER === 'gemini' ? (e.GEMINI_API_KEY ? 'gemini' : null)
     : e.OPENAI_API_KEY ? 'openai' : e.GEMINI_API_KEY ? 'gemini' : null;
-  const storageDir = e.STORAGE_DIR ?? (e.NODE_ENV === 'development' && !e.VERCEL ? path.resolve(process.cwd(), 'data/uploads') : null);
+  // Files belong to projects, which need accounts: the development default only applies with a database.
+  const storageDir = e.STORAGE_DIR ?? (e.NODE_ENV === 'development' && !e.VERCEL && e.DATABASE_URL ? path.resolve(process.cwd(), 'data/uploads') : null);
   const fallbacks = (e.GEMINI_FALLBACK_MODELS ?? 'gemini-flash-lite-latest,gemini-2.5-flash')
     .split(',').map(s => s.trim()).filter(Boolean);
 

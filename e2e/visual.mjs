@@ -334,6 +334,36 @@ check('phone: workspace has no horizontal overflow', await overflow() <= 1, awai
 await shot(pm, 'v-mobile-app');
 await mob.close();
 
+// ============================================================ the landing nav fits at every width
+// The section links need about 880px, so they show from the `lg` breakpoint; below it the nav is logo + search + Launch.
+// 768 is an iPad in portrait: there the old layout pushed Launch ~22px off-screen, and wrapped labels up to ~860.
+const navCtx = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: 'no-preference' });
+const pn = await navCtx.newPage();
+await pn.goto(`${BASE}/?fx=off`, { waitUntil: 'domcontentloaded' });
+await pn.waitForSelector('[data-testid=hero-launch]');
+const navFit = () => pn.evaluate(() => {
+  const nav = document.querySelector('nav[aria-label=Primary]');
+  const inner = nav.getBoundingClientRect().right - parseFloat(getComputedStyle(nav).paddingRight);
+  const launch = [...nav.querySelectorAll('button')].find(b => b.textContent.trim() === 'Launch').getBoundingClientRect();
+  return {
+    overflow: nav.scrollWidth - nav.clientWidth,                 // content wider than the bar
+    launchPastBar: Math.round(launch.right - inner),             // Launch outside the bar's padding box
+    launchPastScreen: Math.round(launch.right - window.innerWidth),
+    wrapped: [...nav.querySelectorAll('ul button')].some(b => b.getBoundingClientRect().height > 34), // a link label on 2+ lines
+    pageWide: document.documentElement.scrollWidth - window.innerWidth
+  };
+});
+const navBad = [];
+for (const w of [360, 390, 640, 767, 768, 800, 820, 860, 900, 1000, 1023, 1024, 1280]) {
+  await pn.setViewportSize({ width: w, height: 900 }); await sleep(120);
+  const r = await navFit();
+  if (r.overflow > 0 || r.launchPastBar > 1 || r.launchPastScreen > 0 || r.wrapped || r.pageWide > 0) navBad.push(`${w}px ${JSON.stringify(r)}`);
+}
+check('landing nav fits from 360 to 1280px: no overflow, Launch inside the bar, no wrapped link labels', navBad.length === 0, navBad.join(' | '));
+const navLinksShown = async w => { await pn.setViewportSize({ width: w, height: 900 }); await sleep(120); return pn.locator('nav[aria-label=Primary] ul').isVisible(); };
+check('section links show from 1024px and are left out below it (tablet nav = logo, search, Launch)', (await navLinksShown(1024)) && (await navLinksShown(1280)) && !(await navLinksShown(1023)) && !(await navLinksShown(768)));
+await navCtx.close();
+
 check('no uncaught errors or console errors anywhere', errors.length === 0, errors.slice(0, 3).join(' | '));
 console.log(`\n${pass} passed, ${fail} failed`);
 await browser.close();
