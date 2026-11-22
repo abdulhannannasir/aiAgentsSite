@@ -4,10 +4,10 @@ import { z } from 'zod';
 
 // ------------------------------------------------------------------ node catalog
 
-export const NODE_KINDS = ['input', 'agent', 'llm', 'tool', 'condition', 'template', 'merge', 'extract', 'approval', 'delay', 'output'] as const;
+export const NODE_KINDS = ['input', 'agent', 'llm', 'tool', 'knowledge', 'condition', 'template', 'merge', 'extract', 'approval', 'delay', 'output'] as const;
 export type NodeKind = (typeof NODE_KINDS)[number];
 /** Kinds the palette shows but that cannot run yet; each says why. They are rejected by validation. */
-export const PLANNED_KINDS = ['knowledge', 'integration', 'webhook_trigger', 'schedule_trigger', 'code'] as const;
+export const PLANNED_KINDS = ['integration', 'webhook_trigger', 'schedule_trigger', 'code'] as const;
 export type PlannedKind = (typeof PLANNED_KINDS)[number];
 
 export interface NodeTypeInfo {
@@ -27,6 +27,7 @@ export const NODE_TYPES: NodeTypeInfo[] = [
   { kind: 'agent', label: 'Agent', group: 'AI', available: true, usesModel: true, description: 'One of the built-in specialist agents works on a prompt, optionally with its tools.' },
   { kind: 'llm', label: 'Prompt', group: 'AI', available: true, usesModel: true, description: 'A model call with your own instructions and prompt.' },
   { kind: 'tool', label: 'Tool', group: 'Data', available: true, description: 'Runs one tool directly (calculator, date/time, read a web page, web search) with templated arguments.' },
+  { kind: 'knowledge', label: 'Knowledge search', group: 'Data', available: true, description: 'Searches the memory and documents the person running the workflow may see (plus the workflow\'s project). Returns labelled passages ([K1]…) to pass to an agent.' },
   { kind: 'condition', label: 'Condition', group: 'Logic', available: true, description: 'Checks a value and continues on the true or the false branch; the other branch is skipped.' },
   { kind: 'template', label: 'Text template', group: 'Data', available: true, description: 'Builds text from earlier results with {{variables}}. No model call.' },
   { kind: 'merge', label: 'Merge', group: 'Logic', available: true, description: 'Joins branches: waits for all inputs, or continues with whichever branches ran.' },
@@ -34,7 +35,6 @@ export const NODE_TYPES: NodeTypeInfo[] = [
   { kind: 'approval', label: 'Approval', group: 'Human', available: true, description: 'Pauses the run until a person approves. Rejecting skips everything after it.' },
   { kind: 'delay', label: 'Delay', group: 'Logic', available: true, description: 'Waits a number of seconds before continuing.' },
   { kind: 'output', label: 'Output', group: 'Output', available: true, description: 'The workflow\'s result. Several outputs are joined in order.' },
-  { kind: 'knowledge', label: 'Knowledge search', group: 'Data', available: false, reason: 'Needs project files and memory (Phase 7).', description: 'Search your documents and memory.' },
   { kind: 'integration', label: 'Integration action', group: 'Data', available: false, reason: 'Needs connected integrations (Phase 8).', description: 'Act in GitHub, Google or Slack.' },
   { kind: 'webhook_trigger', label: 'Webhook trigger', group: 'Trigger', available: false, reason: 'Needs signed inbound webhooks (Phase 8).', description: 'Start a run from another service.' },
   { kind: 'schedule_trigger', label: 'Schedule trigger', group: 'Trigger', available: false, reason: 'Needs a scheduler for recurring runs (not built yet).', description: 'Start runs on a schedule.' },
@@ -56,6 +56,11 @@ const configs = {
   agent: z.object({ agentId: z.string().min(1).max(60), prompt: text(LIMITS.prompt).default(''), tools: z.array(z.string().max(40)).max(10).default([]) }).strict(),
   llm: z.object({ system: text(LIMITS.prompt).default(''), prompt: text(LIMITS.prompt).default(''), temperature: z.number().min(0).max(2).default(0.7) }).strict(),
   tool: z.object({ toolId: z.string().min(1).max(40), args: z.record(z.string().max(60), text(2000)).default({}) }).strict(),
+  knowledge: z.object({
+    query: text(LIMITS.prompt).default(''),
+    limit: z.number().int().min(1).max(10).default(5),
+    scopes: z.array(z.enum(['USER', 'PROJECT', 'AGENT', 'WORKSPACE'])).max(4).default([])
+  }).strict(),
   condition: z.object({ source: text(LIMITS.prompt).default(''), operator: z.enum(CONDITION_OPERATORS).default('contains'), value: text(LIMITS.value).default(''), caseSensitive: z.boolean().default(false) }).strict(),
   template: z.object({ text: text(LIMITS.template).default('') }).strict(),
   merge: z.object({ join: z.enum(['all', 'any']).default('all'), separator: text(200).default('\n\n') }).strict(),
@@ -114,6 +119,7 @@ function templateFields(kind: NodeKind, c: Record<string, unknown>): Array<[stri
     case 'agent': case 'llm': return s('prompt');
     case 'tool': return Object.entries((c.args as Record<string, string>) ?? {}).map(([k, v]) => [`args.${k}`, v]);
     case 'condition': case 'extract': return s('source');
+    case 'knowledge': return s('query');
     case 'template': return s('text');
     case 'approval': return s('message');
     case 'output': return s('template');
@@ -254,6 +260,7 @@ export function validateGraph(raw: unknown, ctx: GraphContext): { graph: Graph |
       if (!String(c.prompt).trim() && incoming(n.id).length === 0) err(`"${n.label}": write a prompt.`, at);
     }
     if (n.kind === 'llm' && !String(c.prompt).trim()) err(`"${n.label}": write a prompt.`, at);
+    if (n.kind === 'knowledge' && !String(c.query).trim()) err(`"${n.label}": write what to search for (e.g. {{input}}).`, at);
     if (n.kind === 'tool') {
       const t = tools.get(String(c.toolId));
       if (!t) err(`"${n.label}": unknown tool "${String(c.toolId)}".`, at);

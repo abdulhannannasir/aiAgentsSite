@@ -12,6 +12,7 @@ import { findAgent } from '../agents/registry.js';
 import { audit } from '../audit/audit.js';
 import { MAX_TASKS } from './plan.js';
 import { NODE_TYPES } from '../studio/graph.js';
+import { accessibleProjectIds } from '../knowledge/memory.js';
 import type { Orchestrator } from './engine.js';
 
 /** A person may have this many orchestrations in progress at once. */
@@ -53,7 +54,8 @@ const byKey = (a: { key: string }, b: { key: string }) => Number(a.key.slice(1))
 export function summary(o: Omit<Loaded, 'tasks'> & { tasks: Array<{ status: string }> }, ctx: AuthContext): OrchestrationSummary {
   return {
     id: o.id, goal: o.goal,
-    workflow: o.workflowId ? { id: o.workflowId, name: o.workflow?.name ?? 'Deleted workflow', version: o.workflowVersion?.version ?? null } : null, status: o.status, durable: o.durable, provider: o.provider, model: o.model, modelCalls: o.modelCalls,
+    workflow: o.workflowId ? { id: o.workflowId, name: o.workflow?.name ?? 'Deleted workflow', version: o.workflowVersion?.version ?? null } : null,
+    projectId: o.projectId, status: o.status, durable: o.durable, provider: o.provider, model: o.model, modelCalls: o.modelCalls,
     inputTokens: o.inputTokens, outputTokens: o.outputTokens, error: o.error, user: o.user?.name ?? null, mine: o.userId === ctx.user.id,
     createdAt: o.createdAt.getTime(), endedAt: ms(o.endedAt),
     tasks: {
@@ -83,7 +85,11 @@ function view(o: Loaded, ctx: AuthContext): OrchestrationView {
   };
 }
 
-const StartBody = z.object({ goal: z.string().trim().min(3, 'Describe the goal in a few words.').max(4000, 'The goal is too long (max 4000 characters).') }).strict();
+const StartBody = z.object({
+  goal: z.string().trim().min(3, 'Describe the goal in a few words.').max(4000, 'The goal is too long (max 4000 characters).'),
+  /** Project context: knowledge searches during the run can read this project's memory and files. */
+  projectId: z.string().max(60).nullish()
+}).strict();
 const IdempotencyKey = z.string().regex(/^[A-Za-z0-9_.:-]{8,100}$/, 'Idempotency-Key must be 8-100 letters, digits or _ . : -');
 const DecideBody = z.object({ decision: z.enum(['approve', 'reject']), note: z.string().trim().max(500).optional() }).strict();
 
@@ -120,7 +126,10 @@ export function orchestrationsRouter(deps: { platform: Platform; log: Logger; li
       if (active >= MAX_ACTIVE_PER_USER) return next(new HttpError('RATE_LIMITED', `You already have ${MAX_ACTIVE_PER_USER} orchestrations in progress. Wait for one to finish or cancel one.`));
       // Planning, up to MAX_TASKS tasks and the synthesis are separate model calls: charge them up front.
       if (!limiter.charge(req.ip ?? 'unknown', MAX_TASKS + 1)) return limiter.tooMany(res);
-      const started = await orch().start({ userId: ctx.user.id, workspaceId: ctx.workspaceId }, body.data.goal, idempotencyKey);
+      if (body.data.projectId && !(await accessibleProjectIds(db(), { workspaceId: ctx.workspaceId, userId: ctx.user.id, role: ctx.workspaceRole })).includes(body.data.projectId)) {
+        return next(notFound('Project not found'));
+      }
+      const started = await orch().start({ userId: ctx.user.id, workspaceId: ctx.workspaceId }, body.data.goal, idempotencyKey, { projectId: body.data.projectId ?? null });
       if (started.created) {
         await audit(db(), log, { workspaceId: ctx.workspaceId, actorId: ctx.user.id, action: 'orchestration.started', targetType: 'orchestration', targetId: started.id, ip: req.ip });
       }

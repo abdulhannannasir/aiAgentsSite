@@ -5,12 +5,13 @@ import { currentTimeTool } from './currentTime.js';
 import { ToolError, type ToolContext, type ToolDefinition } from './types.js';
 import { createUrlFetchTool, type UrlFetchOptions } from './urlFetch.js';
 import { createWebSearchTool } from './webSearch.js';
+import { createKnowledgeTool } from './knowledgeBase.js';
 
 /** Tools that need something this server doesn't have yet. Listed honestly, never offered to a model. */
 function unavailable(id: string, label: string, reason: string): ToolDefinition<Record<string, never>> {
   return {
     id, label, description: label, parameters: { type: 'object', properties: {} }, input: z.object({}).strict() as z.ZodType<Record<string, never>>,
-    timeoutMs: 0, untrustedOutput: false, availability: { available: false, reason },
+    timeoutMs: 0, untrustedOutput: false, external: false, availability: { available: false, reason },
     async run() { throw new ToolError(`${label} is not available: ${reason}`); }
   };
 }
@@ -30,6 +31,8 @@ export interface ToolRegistry {
   list(): ToolInfo[];
   /** The tools an agent may use right now: its permissions ∩ what is available on this server. */
   forAgent(permissions: string[]): ToolDefinition[];
+  /** Whether a tool reaches outside the server (asks for approval in autonomous runs). */
+  isExternal(id: string): boolean;
   specs(tools: ToolDefinition[]): ToolSpec[];
   run(tool: ToolDefinition, rawArgs: Record<string, unknown>, ctx: ToolContext): Promise<ToolRunResult>;
 }
@@ -38,6 +41,8 @@ export interface ToolRegistryOptions {
   tavilyApiKey?: string | null;
   tavilyBaseUrl?: string;
   urlFetch?: UrlFetchOptions;
+  /** The server has a database (memory and files), so the knowledge base tool can work for signed-in callers. */
+  knowledge?: boolean;
 }
 
 /** Every tool id an agent may carry as a permission (also the list the agent-file format accepts). */
@@ -51,7 +56,9 @@ export function createToolRegistry(opts: ToolRegistryOptions = {}): ToolRegistry
     currentTimeTool as ToolDefinition,
     unavailable('code_interpreter', 'Code interpreter', 'Needs an isolated sandbox runtime; code is never run on the API server.'),
     unavailable('file_reader', 'File reader', 'Arrives with project files and storage (Phase 7).'),
-    unavailable('knowledge_base', 'Knowledge base', 'Arrives with memory and knowledge retrieval (Phase 7).'),
+    opts.knowledge
+      ? createKnowledgeTool() as ToolDefinition
+      : unavailable('knowledge_base', 'Knowledge base', 'Needs accounts and a database (DATABASE_URL and BETTER_AUTH_SECRET).'),
     unavailable('ticket_system', 'Ticket system', 'Needs a connected ticketing integration (Phase 8).'),
     unavailable('email_sender', 'Email sender', 'Needs a connected email integration and your approval per message (Phases 5 and 8).')
   ];
@@ -61,6 +68,8 @@ export function createToolRegistry(opts: ToolRegistryOptions = {}): ToolRegistry
     list: () => tools.map(t => ({ id: t.id, label: t.label, description: t.description, available: t.availability.available, ...(t.availability.reason && { reason: t.availability.reason }) })),
 
     forAgent: permissions => [...new Set(permissions)].map(id => byId.get(id)).filter((t): t is ToolDefinition => !!t && t.availability.available),
+
+    isExternal: id => !!byId.get(id)?.external && !!byId.get(id)?.availability.available,
 
     specs: list => list.map(t => ({ name: t.id, description: t.description, parameters: t.parameters })),
 

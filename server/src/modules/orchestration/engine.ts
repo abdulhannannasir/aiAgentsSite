@@ -9,6 +9,8 @@ import { PlanError, citedKeys, demoPlan, extractJson, plannerPrompt, validatePla
 import type { Job, JobQueue } from './queue.js';
 import { compileGraph, evaluateCondition, extractPath, renderTemplate, type CompiledConfig, type ConditionOperator } from '../studio/graph.js';
 import { graphContext } from '../studio/context.js';
+import { accessibleProjectIds, assembleContext, knowledgeSearcher, type MemoryActor, type MemoryScopeT, type MemoryService, type SearchScope } from '../knowledge/memory.js';
+import type { WorkspaceRole } from '../../middleware/session.js';
 
 /** A step that cannot succeed by trying again (bad JSON, a tool refused its input, ...). Shown to the user as is. */
 class StepError extends Error {}
@@ -39,7 +41,7 @@ const RETRYABLE: ReadonlySet<ProviderErrorKind> = new Set(['quota', 'unavailable
 
 /** Tools that reach outside the server (and bring untrusted content back) need a person's approval in an autonomous run. */
 export const needsApproval = (tools: ToolRegistry, toolIds: string[]) =>
-  toolIds.filter(id => tools.forAgent([id]).some(t => t.untrustedOutput));
+  toolIds.filter(id => tools.isExternal(id));
 
 interface Usage { modelCalls: number; inputTokens: number | null; outputTokens: number | null }
 const noUsage = (): Usage => ({ modelCalls: 0, inputTokens: null, outputTokens: null });
@@ -51,7 +53,7 @@ export interface Orchestrator {
   /** Whether this process consumes jobs. Without a worker, durable jobs wait for `npm run worker`. */
   readonly worker: boolean;
   /** Starts a planner run, or (with `workflow`) a run of a saved studio workflow version on `goal` as its input. */
-  start(actor: Actor, goal: string, idempotencyKey?: string | null, workflow?: { workflowId: string; workflowVersionId: string }): Promise<{ id: string; created: boolean }>;
+  start(actor: Actor, goal: string, idempotencyKey?: string | null, extra?: { workflowId?: string; workflowVersionId?: string; projectId?: string | null }): Promise<{ id: string; created: boolean }>;
   cancel(orchestrationId: string): Promise<boolean>;
   /** No new tasks start while paused; running ones finish. */
   pause(orchestrationId: string): Promise<boolean>;
@@ -85,6 +87,8 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => 
  */
 export function createOrchestrator(deps: {
   db: Db; llm: LLMService; tools: ToolRegistry; log: Logger; queue: JobQueue; worker: boolean; options?: Partial<OrchestratorOptions>;
+  /** Knowledge retrieval for tasks that use the knowledge base (null without a database). */
+  memory?: MemoryService | null;
 }): Orchestrator {
   const { db, llm, tools, log, queue } = deps;
   const o: OrchestratorOptions = { ...DEFAULT_ORCHESTRATOR_OPTIONS, ...deps.options };
@@ -120,9 +124,9 @@ export function createOrchestrator(deps: {
 
   /** Runs one model call as `agent` and collects its text, usage and tool calls. */
   async function runAgent(agent: ChatAgent, prompt: string, signal: AbortSignal, usage: Usage, useTools: boolean,
-    onTool?: (ev: Extract<LlmEvent, { type: 'tool_end' }>) => void): Promise<string> {
+    onTool?: (ev: Extract<LlmEvent, { type: 'tool_end' }>) => void, knowledge?: (q: string) => Promise<string>): Promise<string> {
     let text = '';
-    for await (const ev of llm.run({ agent, history: [{ role: 'user', content: prompt }], signal, useTools })) {
+    for await (const ev of llm.run({ agent, history: [{ role: 'user', content: prompt }], signal, useTools, toolContext: knowledge ? { knowledge } : undefined })) {
       if (signal.aborted) break;
       if (ev.type === 'text') text += ev.text;
       else if (ev.type === 'model_call') usage.modelCalls++;
@@ -344,6 +348,24 @@ export function createOrchestrator(deps: {
 
   // ------------------------------------------------------------------ tasks
 
+  /**
+   * What a run may read from memory: the person who started it (their own memories, the workspace, the run's project if
+   * they can still see it) and, for agent tasks, that agent's memory. Null when the starter left the workspace.
+   */
+  async function memoryScope(orch: { workspaceId: string; userId: string | null; projectId: string | null }, agentKeys: string[] | 'all', scopes?: MemoryScopeT[]): Promise<{ scope: SearchScope; actor: MemoryActor } | null> {
+    if (!deps.memory || !orch.userId) return null;
+    const member = await db.member.findUnique({ where: { organizationId_userId: { organizationId: orch.workspaceId, userId: orch.userId } }, select: { role: true } });
+    if (!member) return null;
+    const actor: MemoryActor = { workspaceId: orch.workspaceId, userId: orch.userId, role: member.role as WorkspaceRole };
+    const visible = orch.projectId ? await accessibleProjectIds(db, actor) : [];
+    return { actor, scope: { workspaceId: orch.workspaceId, userId: orch.userId, projectIds: orch.projectId && visible.includes(orch.projectId) ? [orch.projectId] : [], agentKeys, scopes } };
+  }
+  async function knowledgeFor(orch: { workspaceId: string; userId: string | null; projectId: string | null }, agentKey: string, toolIds: string[]) {
+    if (!toolIds.includes('knowledge_base') || !deps.memory) return undefined;
+    const ms = await memoryScope(orch, [agentKey]);
+    return ms ? knowledgeSearcher(deps.memory, ms.scope, ms.actor) : undefined;
+  }
+
   const succeededTasks = (orchestrationId: string) =>
     db.orchestrationTask.findMany({ where: { orchestrationId, status: 'SUCCEEDED' }, select: { key: true, title: true, nodeId: true, output: true } });
 
@@ -356,8 +378,10 @@ export function createOrchestrator(deps: {
   }
 
   /** Steps that run without a model: they transform data, call one tool, branch, or pass their input on. */
-  async function runStep(task: { id: string; orchestrationId: string; kind: string; title: string; dependsOn: string[]; tools: string[] }, cfg: CompiledConfig, goal: string,
+  async function runStep(task: { id: string; orchestrationId: string; kind: string; title: string; dependsOn: string[]; tools: string[] }, cfg: CompiledConfig,
+    orch: { goal: string; workspaceId: string; userId: string | null; projectId: string | null },
     signal: AbortSignal, onTool: (ev: { tool: string; ok: boolean; summary: string; durationMs: number }) => void): Promise<string> {
+    const goal = orch.goal;
     const done = await succeededTasks(task.orchestrationId);
     const vars = varsFor(goal, done, cfg);
     const s = cfg.settings;
@@ -385,6 +409,17 @@ export function createOrchestrator(deps: {
         onTool({ tool: def.id, ok: r.ok, summary: r.summary, durationMs: r.durationMs });
         if (!r.ok) throw new StepError(`${def.label}: ${r.summary}`);
         return r.output;
+      }
+      case 'knowledge': {
+        const query = tpl('query', merged).slice(0, 1000);
+        if (!query.trim()) throw new StepError('The search query is empty.');
+        const ms = await memoryScope(orch, 'all', (s.scopes as MemoryScopeT[] | undefined)?.length ? s.scopes as MemoryScopeT[] : undefined);
+        if (!ms || !deps.memory) throw new StepError('Knowledge search needs the person who started the run to still be in the workspace.');
+        const started = Date.now();
+        const r = await deps.memory.search(ms.scope, query, { limit: Number(s.limit ?? 5), actor: ms.actor });
+        const ctx = assembleContext(r.hits, o.maxContextChars);
+        onTool({ tool: 'knowledge_base', ok: true, summary: `${ctx.sources.length} result${ctx.sources.length === 1 ? '' : 's'} for “${query.slice(0, 80)}”${r.semantic ? '' : ' (keyword matching only)'}`, durationMs: Date.now() - started });
+        return ctx.sources.length ? ctx.text : 'No matching notes or documents were found.';
       }
       default: throw new StepError(`Unknown step type ${cfg.kind}.`);
     }
@@ -423,7 +458,7 @@ export function createOrchestrator(deps: {
     const onTool = (ev: { tool: string; ok: boolean; summary: string; durationMs: number }) => toolCalls.push({ tool: ev.tool, ok: ev.ok, summary: ev.summary.slice(0, 300), durationMs: ev.durationMs });
     try {
       if (cfg && task.kind !== 'agent' && task.kind !== 'llm') {
-        text = await runStep(task, cfg, orch.goal, signal, onTool);
+        text = await runStep(task, cfg, orch, signal, onTool);
       } else if (llm.provider === 'demo') {
         const who = def?.name ?? task.title;
         const demo = `Demo output for ${task.key} (${who}): in live mode this ${def ? 'agent' : 'step'} would work on “${task.title}”.\n\n- Placeholder point one\n- Placeholder point two`;
@@ -437,7 +472,7 @@ export function createOrchestrator(deps: {
         const agent: ChatAgent = task.kind === 'agent'
           ? { ...def!, tools: task.tools }
           : { name: task.title, systemPrompt: String(cfg.settings.system ?? '').trim() || 'You are a careful, helpful assistant.', temperature: Number(cfg.settings.temperature ?? 0.7), tools: [] };
-        text = await runAgent(agent, prompt, signal, usage, task.kind === 'agent' && task.tools.length > 0, onTool);
+        text = await runAgent(agent, prompt, signal, usage, task.kind === 'agent' && task.tools.length > 0, onTool, task.kind === 'agent' ? await knowledgeFor(orch, task.agentId, task.tools) : undefined);
       } else {
         // Least privilege: the agent sees the goal, its own instruction and ONLY the outputs of its dependencies.
         const prompt = `Overall goal (from the user):\n${orch.goal}\n\nYour task (${task.key}): ${task.title}\n${task.instruction}` +
@@ -446,7 +481,7 @@ export function createOrchestrator(deps: {
           ...def!, tools: task.tools,
           systemPrompt: `${def!.systemPrompt}\n\nYou are carrying out one task of a larger plan. Do only this task, thoroughly and concretely. Your output is passed to other agents, so skip greetings and filler. If something cannot be known without tools or data you do not have, say so instead of guessing.`
         };
-        text = await runAgent(agent, prompt, signal, usage, task.tools.length > 0, onTool);
+        text = await runAgent(agent, prompt, signal, usage, task.tools.length > 0, onTool, await knowledgeFor(orch, task.agentId, task.tools));
       }
       if (timeout.aborted) throw new ProviderError('timeout', `task took longer than ${o.taskTimeoutMs} ms`);
       // Deterministic steps may legitimately produce empty text (e.g. a template of an empty value).
@@ -542,7 +577,7 @@ export function createOrchestrator(deps: {
     durable: queue.durable,
     worker: deps.worker,
 
-    async start(actor, goal, idempotencyKey, workflow) {
+    async start(actor, goal, idempotencyKey, extra) {
       if (idempotencyKey) {
         const existing = await db.orchestration.findUnique({ where: { workspaceId_idempotencyKey: { workspaceId: actor.workspaceId, idempotencyKey } }, select: { id: true } });
         if (existing) return { id: existing.id, created: false };
@@ -552,7 +587,7 @@ export function createOrchestrator(deps: {
         row = await db.orchestration.create({
           data: {
             workspaceId: actor.workspaceId, userId: actor.userId, goal, idempotencyKey: idempotencyKey ?? null, durable: queue.durable, provider: llm.provider, model: llm.model,
-            workflowId: workflow?.workflowId ?? null, workflowVersionId: workflow?.workflowVersionId ?? null
+            workflowId: extra?.workflowId ?? null, workflowVersionId: extra?.workflowVersionId ?? null, projectId: extra?.projectId ?? null
           },
           select: { id: true }
         });

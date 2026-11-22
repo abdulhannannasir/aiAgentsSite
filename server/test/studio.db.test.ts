@@ -65,7 +65,7 @@ describe.skipIf(!TEST_DB)('workflow studio (PostgreSQL)', () => {
   it('serves node types, templates and validation without signing in', async () => {
     const c = new Client(s.url);
     const types = (await c.get('/api/v1/studio/node-types')).json;
-    expect(types.nodeTypes.filter((t: { available: boolean }) => t.available)).toHaveLength(11);
+    expect(types.nodeTypes.filter((t: { available: boolean }) => t.available)).toHaveLength(12);
     expect(types.nodeTypes.find((t: { kind: string }) => t.kind === 'code')).toMatchObject({ available: false, reason: expect.stringContaining('sandbox') });
     expect(types.context.tools.find((t: { id: string }) => t.id === 'url_fetch')).toEqual({ id: 'url_fetch', available: true, external: true });
     const templates = (await c.get('/api/v1/studio/templates')).json;

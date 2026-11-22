@@ -23,9 +23,9 @@ if (!cfg.redisUrl) {
   process.exit(1);
 }
 
-const tools = createToolRegistry({ tavilyApiKey: cfg.tools.tavilyApiKey, tavilyBaseUrl: cfg.tools.tavilyBaseUrl });
-const llm = createLLMService(cfg, log, tools);
 const platform = createPlatform(cfg, log);
+const tools = createToolRegistry({ tavilyApiKey: cfg.tools.tavilyApiKey, tavilyBaseUrl: cfg.tools.tavilyBaseUrl, knowledge: !!platform.auth });
+const llm = createLLMService(cfg, log, tools);
 const { orchestrator, status } = setupOrchestration(cfg, platform, llm, tools, log, { worker: true });
 if (!orchestrator) {
   log.fatal({ reason: status.reason }, 'orchestration is not available with this configuration');

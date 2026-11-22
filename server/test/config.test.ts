@@ -11,7 +11,12 @@ describe('loadConfig', () => {
     expect(cfg.port).toBe(3000);
     expect(cfg.limits.rateLimit).toEqual({ windowMs: 60_000, max: 20 });
     expect(cfg.gemini.models).toEqual(['gemini-flash-latest', 'gemini-flash-lite-latest', 'gemini-2.5-flash']);
-    expect(cfg.features).toEqual({ database: false, auth: false, email: false, redis: false, storage: false });
+    // In development, files go to ./data/uploads unless S3 or STORAGE_DIR is configured.
+    expect(cfg.features).toEqual({ database: false, auth: false, email: false, redis: false, storage: true });
+    expect(cfg.storage).toMatchObject({ driver: 'local', s3: null });
+    // Elsewhere there is no default: storage is off until configured.
+    expect(loadConfig({ NODE_ENV: 'production' }).storage.driver).toBeNull();
+    expect(loadConfig({ NODE_ENV: 'test' }).features.storage).toBe(false);
   });
 
   it('follows whichever key is set, OpenAI first, and LLM_PROVIDER can force one', () => {
@@ -52,8 +57,11 @@ describe('loadConfig', () => {
   });
 
   it('reports configured features without exposing values', () => {
-    const cfg = loadConfig({ DATABASE_URL: 'postgres://x', BETTER_AUTH_SECRET: 's'.repeat(32), REDIS_URL: 'redis://x' });
+    const cfg = loadConfig({ NODE_ENV: 'production', DATABASE_URL: 'postgres://x', BETTER_AUTH_SECRET: 's'.repeat(32), REDIS_URL: 'redis://x' });
     expect(cfg.features).toMatchObject({ database: true, auth: true, redis: true, email: false, storage: false });
+    const s3 = loadConfig({ NODE_ENV: 'production', S3_BUCKET: 'b', S3_ACCESS_KEY_ID: 'k', S3_SECRET_ACCESS_KEY: 's', S3_ENDPOINT: 'https://acct.r2.cloudflarestorage.com/' });
+    expect(s3.storage).toMatchObject({ driver: 's3', dir: null, s3: { bucket: 'b', endpoint: 'https://acct.r2.cloudflarestorage.com', region: 'auto', forcePathStyle: false } });
+    expect(() => loadConfig({ S3_BUCKET: 'b' })).toThrow('must be set together');
   });
 });
 

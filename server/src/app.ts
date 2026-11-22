@@ -19,6 +19,7 @@ import { createLLMService, type LLMService } from './modules/providers/llm.js';
 import { createToolRegistry, type ToolRegistry, type ToolRegistryOptions } from './modules/tools/registry.js';
 import { approvalsRouter, orchestrationsRouter } from './modules/orchestration/routes.js';
 import { studioRouter } from './modules/studio/routes.js';
+import { knowledgeRouters } from './modules/knowledge/routes.js';
 import { setupOrchestration, type OrchestrationOverrides, type OrchestrationSetup } from './modules/orchestration/setup.js';
 import { validateWorkflows } from './modules/workflows/engine.js';
 import { v1Router } from './routes/v1.js';
@@ -61,10 +62,10 @@ export interface AppOptions {
 export function createApp(cfg: AppConfig, opts: AppOptions = {}): AppContext {
   validateWorkflows();
   const log = opts.logger ?? createLogger(cfg.logLevel);
-  const tools = createToolRegistry({ tavilyApiKey: cfg.tools.tavilyApiKey, tavilyBaseUrl: cfg.tools.tavilyBaseUrl, ...opts.tools });
+  const platform = createPlatform(cfg, log);
+  const tools = createToolRegistry({ tavilyApiKey: cfg.tools.tavilyApiKey, tavilyBaseUrl: cfg.tools.tavilyBaseUrl, knowledge: !!platform.auth, ...opts.tools });
   const llm = createLLMService(cfg, log, tools, { demoDelay: opts.demoDelay });
   const limiter = new RateLimiter(cfg.limits.rateLimit.windowMs, cfg.limits.rateLimit.max);
-  const platform = createPlatform(cfg, log);
   const orchestration = setupOrchestration(cfg, platform, llm, tools, log, opts.orchestration);
 
   const app = express();
@@ -95,6 +96,9 @@ export function createApp(cfg: AppConfig, opts: AppOptions = {}): AppContext {
   const { orchestrator, status } = orchestration;
   app.use('/api/v1/orchestrations', orchestrationsRouter({ platform, log, limiter, orchestrator, reason: status.reason }));
   app.use('/api/v1/approvals', approvalsRouter({ platform, log, orchestrator, reason: status.reason }));
+  const knowledge = knowledgeRouters({ cfg, platform, log });
+  app.use('/api/v1/projects', knowledge.projects);
+  app.use('/api/v1/memory', knowledge.memory);
   app.use('/api/v1/studio', studioRouter({ platform, log, tools, limiter, orchestrator, orchestrationReason: status.reason }));
   app.use('/api/v1', api);
   app.use('/api', api); // unversioned aliases, kept for existing clients

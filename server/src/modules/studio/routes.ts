@@ -15,6 +15,7 @@ import type { ToolRegistry } from '../tools/registry.js';
 import { graphContext } from './context.js';
 import { GraphSchema, NODE_TYPES, hasErrors, validateGraph, type GraphIssue } from './graph.js';
 import { STARTER, TEMPLATES } from './templates.js';
+import { accessibleProjectIds } from '../knowledge/memory.js';
 
 const Meta = z.object({ name: z.string().trim().min(1, 'Give the workflow a name.').max(80), description: z.string().trim().max(500).optional() });
 const CreateBody = Meta.extend({ templateId: z.string().max(60).optional(), graph: z.unknown().optional() }).strict();
@@ -55,7 +56,7 @@ export function studioRouter(deps: { platform: Platform; log: Logger; tools: Too
   const view = (w: Found, ctx: AuthContext) => {
     const v = w.versions[0];
     return {
-      id: w.id, name: w.name, description: w.description, templateId: w.templateId, createdBy: w.createdBy?.name ?? null,
+      id: w.id, name: w.name, description: w.description, templateId: w.templateId, projectId: w.projectId, createdBy: w.createdBy?.name ?? null,
       canDelete: w.createdById === ctx.user.id || canManage(ctx.workspaceRole), createdAt: w.createdAt.getTime(), updatedAt: w.updatedAt.getTime(),
       version: v ? { version: v.version, graph: v.graph, valid: v.valid, note: v.note, createdAt: v.createdAt.getTime(), issues: validateGraph(v.graph, ctxOf()).issues } : null
     };
@@ -115,9 +116,12 @@ export function studioRouter(deps: { platform: Platform; log: Logger; tools: Too
   r.patch('/workflows/:id', async (req, res, next) => {
     try {
       const ctx = authOf(res)!;
-      const body = Meta.partial().strict().safeParse(req.body ?? {});
+      const body = Meta.partial().extend({ projectId: z.string().max(60).nullable().optional() }).strict().safeParse(req.body ?? {});
       if (!body.success) return next(badRequest(body.error.issues[0]?.message ?? 'Invalid request'));
       const w = await find(ctx, req.params.id);
+      if (body.data.projectId && !(await accessibleProjectIds(db(), { workspaceId: ctx.workspaceId, userId: ctx.user.id, role: ctx.workspaceRole })).includes(body.data.projectId)) {
+        return next(notFound('Project not found'));
+      }
       await db().workflow.update({ where: { id: w.id }, data: body.data });
       res.json(view(await find(ctx, w.id), ctx));
     } catch (err) { next(err); }
@@ -206,7 +210,7 @@ export function studioRouter(deps: { platform: Platform; log: Logger; tools: Too
       // Each model-calling step is a model call: charge them up front.
       const modelSteps = (v.graph as { nodes: Array<{ kind: string }> }).nodes.filter(n => n.kind === 'agent' || n.kind === 'llm').length;
       if (modelSteps > 1 && !limiter.charge(req.ip ?? 'unknown', modelSteps - 1)) return limiter.tooMany(res);
-      const started = await orchestrator.start({ userId: ctx.user.id, workspaceId: ctx.workspaceId }, body.data.input, rawKey ?? null, { workflowId: w.id, workflowVersionId: v.id });
+      const started = await orchestrator.start({ userId: ctx.user.id, workspaceId: ctx.workspaceId }, body.data.input, rawKey ?? null, { workflowId: w.id, workflowVersionId: v.id, projectId: w.projectId });
       if (started.created) await audit(db(), log, { workspaceId: ctx.workspaceId, actorId: ctx.user.id, action: 'workflow.run', targetType: 'workflow', targetId: w.id, metadata: { version: v.version, orchestrationId: started.id }, ip: req.ip });
       res.status(started.created ? 202 : 200).json(started);
     } catch (err) { next(err); }

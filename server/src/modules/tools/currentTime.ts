@@ -9,6 +9,7 @@ export const currentTimeTool: ToolDefinition<{ timezone?: string }> = {
   input: z.object({ timezone: z.string().max(64).optional() }),
   timeoutMs: 1000,
   untrustedOutput: false,
+  external: false,
   availability: { available: true },
   async run({ timezone }, ) {
     const now = new Date();

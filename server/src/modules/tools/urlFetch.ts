@@ -95,6 +95,7 @@ export function createUrlFetchTool(opts: UrlFetchOptions = {}): ToolDefinition<{
     input: z.object({ url: z.string().min(1).max(2000) }),
     timeoutMs: 15_000,
     untrustedOutput: true,
+    external: true,
     availability: { available: true },
     async run({ url: raw }, ctx) {
       let url = checkUrl(raw, opts.allowPrivateNetwork);

@@ -65,7 +65,7 @@ await page.getByRole('button', { name: 'New workflow' }).click();
 await page.getByTestId('studio').waitFor({ timeout: 10000 });
 await node('input').waitFor();
 check('a new workflow starts as Input → Result with no errors', await node('result').isVisible() && /No errors/.test(await page.getByTestId('issues-toggle').textContent()));
-check('planned step types are shown but disabled', await page.getByRole('button', { name: /Knowledge search \(not available yet: Needs project files/ }).isDisabled());
+check('planned step types are shown but disabled', await page.getByRole('button', { name: /Run code \(not available yet: Needs an isolated sandbox/ }).isDisabled());
 await page.getByRole('button', { name: 'Add Text template' }).click();
 await node('template_1').waitFor();
 check('a new unconnected step is an error and Run is disabled', /1 error/.test(await page.getByTestId('issues-toggle').textContent()) && await page.getByRole('button', { name: 'Run', exact: true }).isDisabled());

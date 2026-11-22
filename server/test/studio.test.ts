@@ -28,13 +28,13 @@ describe('graph validation', () => {
 
   it('flags disconnected steps, self-loops, duplicate ids and unknown or planned kinds', () => {
     const g = {
-      nodes: [n('i', 'input'), n('a', 'template', { text: 'x' }, 'A'), n('o', 'output'), n('o', 'output'), n('k', 'knowledge', {}, 'Search'), n('z', 'mystery', {}, 'Z')],
+      nodes: [n('i', 'input'), n('a', 'template', { text: 'x' }, 'A'), n('o', 'output'), n('o', 'output'), n('k', 'integration', {}, 'Act'), n('z', 'mystery', {}, 'Z')],
       edges: [e('i', 'o'), e('o', 'o'), e('i', 'k'), e('i', 'z')]
     };
     const errs = errors(g);
     expect(errs).toEqual(expect.arrayContaining([
       'Two steps use the id "o".', '"A" has no incoming connection.', '"o" is connected to itself.',
-      '"Search": Knowledge search is not available yet. Needs project files and memory (Phase 7).', '"Z" has an unknown type "mystery".'
+      '"Act": Integration action is not available yet. Needs connected integrations (Phase 8).', '"Z" has an unknown type "mystery".'
     ]));
   });
 

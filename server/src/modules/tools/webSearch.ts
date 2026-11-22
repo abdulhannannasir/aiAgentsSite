@@ -27,6 +27,7 @@ export function createWebSearchTool(opts: WebSearchOptions): ToolDefinition<{ qu
     input: z.object({ query: z.string().min(1).max(400), max_results: z.number().int().min(1).max(8).optional() }),
     timeoutMs: 15_000,
     untrustedOutput: true,
+    external: true,
     availability: opts.apiKey ? { available: true } : { available: false, reason: 'Awaiting configuration: set TAVILY_API_KEY on the server.' },
     async run({ query, max_results }, ctx) {
       if (!opts.apiKey) throw new ToolError('Web search is not configured on this server.');

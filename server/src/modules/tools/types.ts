@@ -4,6 +4,8 @@ import type { Logger } from '../../lib/logger.js';
 export interface ToolContext {
   signal: AbortSignal;
   log: Logger;
+  /** Searches the caller's knowledge (only set for signed-in callers, already limited to what they may see). */
+  knowledge?: (query: string) => Promise<string>;
 }
 
 export interface ToolAvailability {
@@ -24,8 +26,12 @@ export interface ToolDefinition<I = unknown> {
   parameters: Record<string, unknown>;
   input: z.ZodType<I>;
   timeoutMs: number;
-  /** True when its output comes from outside the server (web pages, search results). */
+  /** True when its output must be treated as information, never instructions (web pages, search results, uploaded files). */
   untrustedOutput: boolean;
+  /** True when it sends requests to services outside this server: autonomous runs ask a person first. */
+  external: boolean;
+  /** True when it needs a signed-in caller's context (e.g. their knowledge). Not offered to guests. */
+  needsUser?: boolean;
   availability: ToolAvailability;
   run(input: I, ctx: ToolContext): Promise<string>;
 }

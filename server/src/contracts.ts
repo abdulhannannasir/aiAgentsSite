@@ -150,6 +150,8 @@ export interface OrchestrationSummary {
   goal: string;
   /** Set for runs of a studio workflow. */
   workflow: { id: string; name: string; version: number | null } | null;
+  /** Project context of the run, if any. */
+  projectId: string | null;
   status: OrchestrationStatus;
   durable: boolean;
   provider: string;

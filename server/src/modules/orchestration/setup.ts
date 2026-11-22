@@ -32,7 +32,7 @@ export function setupOrchestration(cfg: AppConfig, platform: Platform, llm: LLMS
     ? createBullQueue(cfg.redisUrl, log, { concurrency: cfg.orchestration.workerConcurrency, prefix: overrides.redisPrefix })
     : createInProcessQueue(log, cfg.orchestration.workerConcurrency);
   const orchestrator = createOrchestrator({
-    db: platform.db!, llm, tools, log, queue, worker,
+    db: platform.db!, llm, tools, log, queue, worker, memory: platform.memory,
     options: { concurrencyPerRun: cfg.orchestration.concurrencyPerRun, retryBaseMs: cfg.orchestration.retryBaseMs, ...overrides.options }
   });
   if (!queue.durable) log.warn('REDIS_URL is not set: orchestration jobs run in this process and are not durable (a restart re-runs interrupted tasks)');

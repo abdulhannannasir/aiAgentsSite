@@ -31,6 +31,8 @@ export interface RunOptions {
   useTools?: boolean;
   /** Asked before every model call after the first; returning false stops the run (rate limits). */
   allowExtraCall?: () => boolean;
+  /** Per-caller tool context. Tools that need a signed-in user (knowledge) are only offered when it is given. */
+  toolContext?: { knowledge?: (query: string) => Promise<string> };
 }
 
 export interface LLMService {
@@ -108,13 +110,13 @@ export function createLLMService(cfg: AppConfig, log: Logger, tools: ToolRegistr
       }))
     }),
 
-    async *run({ agent, history, signal, useTools = true, allowExtraCall }) {
+    async *run({ agent, history, signal, useTools = true, allowExtraCall, toolContext }) {
       const adapter = resolve(agent);
       if (!adapter) {
         for await (const t of demoText(buildDemoResponse(agent), signal)) yield { type: 'text', text: t };
         return;
       }
-      const offered = useTools && adapter.capabilities.tools ? tools.forAgent(agent.tools) : [];
+      const offered = useTools && adapter.capabilities.tools ? tools.forAgent(agent.tools).filter(t => !t.needsUser || toolContext?.knowledge) : [];
       const specs = tools.specs(offered);
       const system = offered.length ? `${agent.systemPrompt}${TOOL_GUIDANCE}` : agent.systemPrompt;
       const turns: Turn[] = history.map(m => (m.role === 'user' ? { role: 'user', content: m.content } : { role: 'assistant', content: m.content }));
@@ -145,7 +147,7 @@ export function createLLMService(cfg: AppConfig, log: Logger, tools: ToolRegistr
             turns.push({ role: 'tool', toolCallId: call.id, name: call.name, content: msg });
             continue;
           }
-          const result = await tools.run(def, call.args, { signal, log });
+          const result = await tools.run(def, call.args, { signal, log, knowledge: toolContext?.knowledge });
           if (signal.aborted) return;
           log.info({ tool: def.id, ok: result.ok, ms: result.durationMs }, 'tool call');
           yield { type: 'tool_end', id: call.id, tool: def.id, ok: result.ok, summary: result.summary, durationMs: result.durationMs };

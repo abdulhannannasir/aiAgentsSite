@@ -63,6 +63,7 @@ export const calculatorTool: ToolDefinition<{ expression: string }> = {
   input: z.object({ expression: z.string().min(1).max(300) }),
   timeoutMs: 1000,
   untrustedOutput: false,
+  external: false,
   availability: { available: true },
   async run({ expression }) {
     const v = evaluate(expression);

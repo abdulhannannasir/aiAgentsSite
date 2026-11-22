@@ -73,7 +73,21 @@ const EnvSchema = z.object({
   SMTP_URL: z.preprocess(blankToUndefined, z.string().regex(/^smtps?:\/\//, 'must start with smtp:// or smtps://').optional()),
   MAIL_FROM: z.preprocess(blankToUndefined, z.string().default('AgentVerse <no-reply@localhost>')),
   REDIS_URL: z.preprocess(blankToUndefined, z.string().regex(/^rediss?:\/\//, 'must start with redis:// or rediss://').optional()),
+  // Object storage for project files (Phase 7): any S3-compatible service, e.g. Cloudflare R2.
   S3_BUCKET: optionalString,
+  // R2: https://<account id>.r2.cloudflarestorage.com. Empty = AWS S3.
+  S3_ENDPOINT: z.preprocess(blankToUndefined, z.string().url().optional()).transform(v => (v ? stripSlash(v) : v)),
+  S3_REGION: z.preprocess(blankToUndefined, z.string().default('auto')),
+  S3_ACCESS_KEY_ID: optionalString,
+  S3_SECRET_ACCESS_KEY: optionalString,
+  S3_FORCE_PATH_STYLE: z.preprocess(blankToUndefined, z.enum(['true', 'false']).optional()),
+  // Without S3: files are kept in this directory (NODE_ENV=development default: ./data/uploads; never use on serverless hosts).
+  STORAGE_DIR: optionalString,
+  MAX_UPLOAD_MB: num(10),
+  // Embeddings for semantic memory search. Default: the provider whose key is set (OpenAI first). none = keyword search only.
+  EMBEDDING_PROVIDER: z.preprocess(v => (typeof v === 'string' ? v.toLowerCase() : v), z.preprocess(blankToUndefined, z.enum(['openai', 'gemini', 'none']).optional())),
+  OPENAI_EMBEDDING_MODEL: z.preprocess(blankToUndefined, z.string().default('text-embedding-3-small')),
+  GEMINI_EMBEDDING_MODEL: z.preprocess(blankToUndefined, z.string().default('gemini-embedding-001')),
 
   // Orchestration (Phase 5). Whether this process also consumes orchestration jobs. Default: on, except on
   // serverless hosts (Vercel), where a separate `npm run worker` process must do it.
@@ -127,6 +141,14 @@ export interface AppConfig {
   };
   mail: { smtpUrl: string | null; from: string };
   redisUrl: string | null;
+  storage: {
+    /** s3 (S3_BUCKET + keys), local (STORAGE_DIR, or ./data/uploads outside production), or null (files unavailable). */
+    driver: 's3' | 'local' | null;
+    s3: { bucket: string; endpoint?: string; region: string; accessKeyId: string; secretAccessKey: string; forcePathStyle: boolean } | null;
+    dir: string | null;
+    maxUploadBytes: number;
+  };
+  embeddings: { provider: 'openai' | 'gemini' | null; model: string | null; apiKey: string | null; baseUrl: string | null };
   orchestration: {
     /** This process consumes orchestration jobs. */
     worker: boolean;
@@ -163,6 +185,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     throw new ConfigError(parsed.error.issues.map(i => `${i.path.join('.') || '(root)'}: ${i.message}`));
   }
   const e = parsed.data;
+  // Partial S3 settings are a mistake worth stopping for (files would silently go somewhere else).
+  const s3Parts = [e.S3_BUCKET, e.S3_ACCESS_KEY_ID, e.S3_SECRET_ACCESS_KEY];
+  if (s3Parts.some(Boolean) && !s3Parts.every(Boolean)) {
+    throw new ConfigError(['S3_BUCKET, S3_ACCESS_KEY_ID and S3_SECRET_ACCESS_KEY must be set together (or none of them).']);
+  }
+  const embedProvider = e.EMBEDDING_PROVIDER === 'none' ? null
+    : e.EMBEDDING_PROVIDER === 'openai' ? (e.OPENAI_API_KEY ? 'openai' : null)
+    : e.EMBEDDING_PROVIDER === 'gemini' ? (e.GEMINI_API_KEY ? 'gemini' : null)
+    : e.OPENAI_API_KEY ? 'openai' : e.GEMINI_API_KEY ? 'gemini' : null;
+  const storageDir = e.STORAGE_DIR ?? (e.NODE_ENV === 'development' && !e.VERCEL ? path.resolve(process.cwd(), 'data/uploads') : null);
   const fallbacks = (e.GEMINI_FALLBACK_MODELS ?? 'gemini-flash-lite-latest,gemini-2.5-flash')
     .split(',').map(s => s.trim()).filter(Boolean);
 
@@ -200,7 +232,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       auth: !!e.DATABASE_URL && !!e.BETTER_AUTH_SECRET,
       email: !!e.SMTP_URL,
       redis: !!e.REDIS_URL,
-      storage: !!e.S3_BUCKET
+      storage: !!e.S3_BUCKET || !!storageDir
     },
     databaseUrl: e.DATABASE_URL ?? null,
     auth: {
@@ -210,6 +242,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     },
     mail: { smtpUrl: e.SMTP_URL ?? null, from: e.MAIL_FROM },
     redisUrl: e.REDIS_URL ?? null,
+    storage: {
+      driver: e.S3_BUCKET ? 's3' : storageDir ? 'local' : null,
+      s3: e.S3_BUCKET ? {
+        bucket: e.S3_BUCKET, endpoint: e.S3_ENDPOINT, region: e.S3_REGION, accessKeyId: e.S3_ACCESS_KEY_ID!, secretAccessKey: e.S3_SECRET_ACCESS_KEY!,
+        forcePathStyle: e.S3_FORCE_PATH_STYLE === 'true'
+      } : null,
+      dir: e.S3_BUCKET ? null : storageDir,
+      maxUploadBytes: Math.max(1, Math.min(100, e.MAX_UPLOAD_MB)) * 1024 * 1024
+    },
+    embeddings: {
+      provider: embedProvider,
+      model: embedProvider === 'openai' ? e.OPENAI_EMBEDDING_MODEL : embedProvider === 'gemini' ? e.GEMINI_EMBEDDING_MODEL : null,
+      apiKey: embedProvider === 'openai' ? e.OPENAI_API_KEY! : embedProvider === 'gemini' ? e.GEMINI_API_KEY! : null,
+      baseUrl: embedProvider === 'openai' ? e.OPENAI_BASE_URL : embedProvider === 'gemini' ? e.GEMINI_BASE_URL : null
+    },
     orchestration: {
       worker: e.ORCHESTRATION_WORKER ? e.ORCHESTRATION_WORKER === 'on' : !e.VERCEL,
       serverless: !!e.VERCEL,

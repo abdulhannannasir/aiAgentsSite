@@ -10,3 +10,6 @@ npm-debug.log*
 
 # Redis snapshots from a local redis-server
 dump.rdb
+
+# Local file storage (STORAGE_DIR default in development)
+/data/

@@ -19,6 +19,7 @@ import { WORKFLOWS } from '../modules/workflows/definitions.js';
 import { addUsage, findWorkflow, newMeter, runWorkflow, toPublicWorkflow } from '../modules/workflows/engine.js';
 import { runningExecutions } from '../modules/executions/running.js';
 import { ProviderError } from '../modules/providers/types.js';
+import { knowledgeSearcher } from '../modules/knowledge/memory.js';
 
 export interface RouteDeps {
   cfg: AppConfig;
@@ -161,7 +162,11 @@ export function v1Router({ cfg, log, llm, tools, limiter, version, platform, orc
       } else {
         // Each extra model call (after a tool result) counts against the caller's rate limit too.
         const allowExtraCall = () => limiter.charge(req.ip ?? 'unknown', 1);
-        for await (const ev of llm.run({ agent: agent!, history: messages, signal, allowExtraCall })) {
+        // Signed-in callers' agents may search their knowledge: their own and the workspace's memory, and this agent's.
+        const knowledge = ctx && platform.memory
+          ? knowledgeSearcher(platform.memory, { workspaceId: ctx.workspaceId, userId: ctx.user.id, projectIds: [], agentKeys: threadKey ? [threadKey] : [] }, { workspaceId: ctx.workspaceId, userId: ctx.user.id, role: ctx.workspaceRole })
+          : undefined;
+        for await (const ev of llm.run({ agent: agent!, history: messages, signal, allowExtraCall, toolContext: knowledge ? { knowledge } : undefined })) {
           if (ev.type === 'text') { answer += ev.text; sse.send({ type: 'stream', content: ev.text }); }
           else if (ev.type === 'model_call') meter.modelCalls++;
           else if (ev.type === 'usage') addUsage(meter, ev.inputTokens, ev.outputTokens);
